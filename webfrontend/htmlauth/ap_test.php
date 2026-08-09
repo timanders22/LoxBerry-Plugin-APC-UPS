@@ -1,6 +1,6 @@
 <?php
 /**
- * APC-UPS - Aktionen des Reiters Test
+ * APC-UPS NG - Aktionen des Reiters Test
  *
  * Jede Funktion liefert array(Ueberschrift, Text). Der Text wird von der
  * Oberflaeche maskiert ausgegeben, hier also bewusst als Klartext erzeugt.
@@ -24,11 +24,19 @@ function ap_einmal_lesen()
         return array('fehler' => 'apc_lesen.py nicht gefunden: ' . $skript);
     }
     $out = array();
-    @exec('timeout 30 python3 ' . escapeshellarg($skript) . ' 2>&1', $out);
+    $rc = 0;
+    @exec('timeout 30 python3 ' . escapeshellarg($skript) . ' 2>&1', $out, $rc);
     $roh = trim(implode("\n", $out));
+    // timeout meldet 124, wenn es zugeschlagen hat. Ohne diese Unterscheidung
+    // stand dort "keine verwertbare Antwort" - und der Nutzer suchte den
+    // Fehler im JSON statt in der haengenden Abfrage.
+    if ($rc === 124) {
+        return array('fehler' => ap_t('TEST.ABFRAGE_HAENGT'));
+    }
     $j = @json_decode($roh, true);
     if (!is_array($j)) {
-        return array('fehler' => "Die Abfrage lieferte keine verwertbare Antwort:\n\n"
+        return array('fehler' => ($rc !== 0 ? sprintf(ap_t('TEST.ABFRAGE_RC'), $rc) . "\n\n" : '')
+            . "Die Abfrage lieferte keine verwertbare Antwort:\n\n"
             . substr($roh, 0, 800));
     }
     return $j;
@@ -176,7 +184,7 @@ function ap_test_ausfuehren($was)
             }
             $out = array();
             @exec('php ' . escapeshellarg($skript) . ' 6 '
-                . escapeshellarg('Testmeldung des Plugins APC-UPS. Wenn du das liest, funktionieren die Benachrichtigungen.')
+                . escapeshellarg('Testmeldung des Plugins APC-UPS NG. Wenn du das liest, funktionieren die Benachrichtigungen.')
                 . ' 2>&1', $out, $rc);
             return array('Testmeldung',
                 ($rc === 0

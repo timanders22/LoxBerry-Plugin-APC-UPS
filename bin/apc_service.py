@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-APC-UPS - Ueberwachungsdienst
+APC-UPS NG - Ueberwachungsdienst
 
 Fragt in einstellbarem Takt apcaccess ab und veroeffentlicht die Werte
 retained per MQTT. Wechselt die USV zwischen Netz- und Akkubetrieb, legt der
@@ -18,12 +18,16 @@ Neu geschrieben fuer LoxBerry 4:
     Dienst erkannt, nicht mehr ueber Ereignisskripte von apcupsd.
 """
 
+import atexit
+import fcntl
 import json
 import logging
 import os
 import signal
+import socket
 import subprocess
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -33,7 +37,7 @@ import apc_common as gem   # noqa: E402
 _handlers = []
 try:
     os.makedirs(gem.LOG_DIR, exist_ok=True)
-    _handlers.append(logging.FileHandler(os.path.join(gem.LOG_DIR, "apc_ups.log")))
+    _handlers.append(logging.FileHandler(os.path.join(gem.LOG_DIR, "apc_ups_ng.log")))
 except OSError:
     pass
 _handlers.append(logging.StreamHandler(sys.stdout))
@@ -44,7 +48,76 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=_handlers,
 )
-log = logging.getLogger("apc_ups")
+log = logging.getLogger("apc_ups_ng")
+
+PID_DATEI = os.path.join(gem.LOG_DIR if os.path.isdir("/run/shm") is False else "/run/shm",
+                         "apc_ups_ng.pid")
+_sperre_fh = None
+
+
+def einmal_starten():
+    """Nur eine Fassung des Dienstes zulassen.
+
+    Ohne Sperre konnte die Oberflaeche beliebig viele starten: ap_dienst()
+    rief nohup auf, ohne vorher nachzusehen. Zwei schnelle Klicks auf
+    Speichern - jeder loest einen Neustart aus - und es liefen zwei Dienste,
+    die dieselbe USV abfragten und sich beim Schreiben nach MQTT gegenseitig
+    ueberholten.
+
+    Die Sperre haengt an der offenen Datei, nicht an ihrem Inhalt: stirbt der
+    Prozess, gibt das Betriebssystem sie frei. Eine liegengebliebene
+    PID-Datei blockiert also nichts.
+    """
+    global _sperre_fh
+    try:
+        os.makedirs(os.path.dirname(PID_DATEI), exist_ok=True)
+        _sperre_fh = open(PID_DATEI, "a+", encoding="utf-8")
+        fcntl.flock(_sperre_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    except BlockingIOError:
+        return False
+    _sperre_fh.seek(0)
+    _sperre_fh.truncate()
+    _sperre_fh.write(str(os.getpid()))
+    _sperre_fh.flush()
+    atexit.register(_sperre_freigeben)
+    return True
+
+
+def _sperre_freigeben():
+    global _sperre_fh
+    if _sperre_fh is None:
+        return
+    try:
+        fcntl.flock(_sperre_fh, fcntl.LOCK_UN)
+        _sperre_fh.close()
+    except OSError:
+        pass
+    try:
+        os.unlink(PID_DATEI)
+    except OSError:
+        pass
+    _sperre_fh = None
+
+
+# Welche Themen dauerhaft im Broker liegen bleiben sollen.
+#
+# Retain ist fuer Zustaende gedacht, die auch ohne neue Nachricht gelten:
+# Modell, Seriennummer, ob die USV am Netz haengt. Ein neu verbundener
+# Abnehmer soll die sofort kennen und nicht erst auf den naechsten Takt
+# warten.
+#
+# Fuer Messwerte ist Retain dagegen schaedlich: Restlaufzeit, Last und
+# Akkuspannung aendern sich staendig, bleiben aber als "letzter Wille" im
+# Broker liegen. Verbindet sich ein Abnehmer nach einer Stunde neu, bekommt
+# er eine stundenalte Restlaufzeit serviert und haelt sie fuer aktuell -
+# bei einer USV ist das die eine Zahl, auf die es ankommt. Ausserdem blaeht
+# es die Ablage des Brokers unnoetig auf.
+RETAIN_THEMEN = frozenset((
+    "status", "model", "serial", "battery_date", "on_line", "on_battery",
+    "replace_battery", "valid", "data_valid", "comm_lost", "service/online",
+))
 
 
 class Mqtt:
@@ -91,7 +164,7 @@ class Mqtt:
         try:
             self.client.publish(self.praefix + "/" + unterthema,
                                 "" if wert is None else str(wert),
-                                qos=0, retain=True)
+                                qos=0, retain=(unterthema in RETAIN_THEMEN))
         except Exception as fehler:  # noqa: BLE001
             log.error("MQTT-Veröffentlichung fehlgeschlagen: %s", fehler)
 
@@ -118,16 +191,42 @@ def email_senden(betreff, text, empfaenger="root"):
     else:
         return False, "sendmail ist auf diesem System nicht vorhanden"
     empfaenger = (empfaenger or "root").strip() or "root"
-    nachricht = ("To: {0}\nSubject: {1}\nContent-Type: text/plain; charset=UTF-8\n\n{2}\n"
-                 .format(empfaenger, betreff, text))
+    # Ohne From-Kopfzeile weisen die meisten Mailserver und Spamfilter die
+    # Nachricht rundheraus ab. Der Rechnername reicht als Absender.
+    absender = "loxberry@" + (socket.gethostname() or "loxberry")
+    nachricht = ("From: {0}\nTo: {1}\nSubject: {2}\n"
+                 "Content-Type: text/plain; charset=UTF-8\n\n{3}\n"
+                 .format(absender, empfaenger, betreff, text))
     try:
+        # Zehn statt dreissig Sekunden: der Aufruf laeuft zwar in einem
+        # Nebenlauf, aber ein haengender Mailserver soll nicht minutenlang
+        # einen Faden binden.
         lauf = subprocess.run([prog, "-t"], input=nachricht, text=True,
-                              capture_output=True, timeout=30)
+                              capture_output=True, timeout=10)
     except (OSError, subprocess.SubprocessError) as fehler:
         return False, str(fehler)
     if lauf.returncode != 0:
         return False, (lauf.stderr or "").strip()[:200]
     return True, empfaenger
+
+
+def email_im_hintergrund(betreff, text, empfaenger="root"):
+    """E-Mail verschicken, ohne die Hauptschleife anzuhalten.
+
+    sendmail lief bisher im Hauptfaden. Haengt der Mailserver, stand der
+    ganze Dienst - und weil in dieser Zeit auch die MQTT-Bibliothek nicht
+    zum Zug kommt, riss der Broker die Verbindung wegen ausbleibendem
+    Lebenszeichen ab. Ausgerechnet bei einem Stromausfall, also genau dann,
+    wenn die Meldung wichtig ist.
+    """
+    def arbeit():
+        ok, info = email_senden(betreff, text, empfaenger)
+        if ok:
+            log.info("E-Mail an %s verschickt.", info)
+        else:
+            log.warning("E-Mail nicht verschickt: %s", info)
+
+    threading.Thread(target=arbeit, name="apc-mail", daemon=True).start()
 
 
 class Dienst:
@@ -218,10 +317,11 @@ class Dienst:
             if not gem.benachrichtigen("{0}: {1}".format(titel, text), schwere):
                 log.info("LoxBerry-Benachrichtigung nicht möglich")
         if self.cfg.get("email", "0") == "1":
-            ok, wohin = email_senden("APC-UPS: " + titel, text,
-                                     self.cfg.get("email_an", "root"))
-            log.info("E-Mail an %s verschickt", wohin) if ok else \
-                log.warning("E-Mail nicht verschickt: %s", wohin)
+            # Im Nebenlauf: ein haengender Mailserver darf die Hauptschleife
+            # nicht anhalten - sonst reisst waehrend eines Stromausfalls die
+            # MQTT-Verbindung ab, weil das Lebenszeichen ausbleibt.
+            email_im_hintergrund("APC-UPS NG: " + titel, text,
+                                 self.cfg.get("email_an", "root"))
 
     def durchgang(self, erzwingen=False):
         ergebnis = gem.abfragen(self.cfg)
@@ -256,7 +356,7 @@ class Dienst:
         })
 
     def start(self):
-        log.info("APC-UPS %s startet", gem.version())
+        log.info("APC-UPS NG %s startet", gem.version())
         log.info("Konfiguration: %s", gem.CONFIG_FILE)
         prog = gem.apcaccess_pfad()
         log.info("apcaccess: %s", prog or "NICHT GEFUNDEN")
@@ -300,6 +400,12 @@ class Dienst:
 
 
 def main():
+    if not einmal_starten():
+        log.warning("Es laeuft bereits ein APC-UPS NG-Dienst (%s) - dieser Start wird "
+                    "beendet. Das ist kein Fehler: die Oberflaeche startet den "
+                    "Dienst bei jedem Speichern neu.", PID_DATEI)
+        return 0
+
     dienst = Dienst()
 
     def beenden(signum, rahmen):   # noqa: ARG001
@@ -315,6 +421,7 @@ def main():
         pass
     finally:
         dienst.stop()
+        _sperre_freigeben()
         log.info("Beendet")
 
 

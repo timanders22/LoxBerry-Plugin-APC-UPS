@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-APC-UPS - einmalige Abfrage
+APC-UPS NG - einmalige Abfrage
 
 Wird vom Reiter Test aufgerufen und gibt das Ergebnis als JSON auf die
 Standardausgabe. Laeuft unabhaengig vom Dienst, damit man die USV

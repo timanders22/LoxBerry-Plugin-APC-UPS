@@ -1,6 +1,6 @@
 <?php
 /**
- * APC-UPS - XML-Endpunkt fuer Loxone
+ * APC-UPS NG - XML-Endpunkt fuer Loxone
  *
  * Diese Seite liefert dieselbe XML-Struktur wie die Originalfassung, damit
  * bestehende Loxone-Konfigurationen unveraendert weiterlaufen. Fuer neue
@@ -22,7 +22,10 @@
  * Erreicht wurde die Stelle nur bei Loglevel 1 bis 4 - also genau dann,
  * wenn ein Fehler gemeldet werden sollte. Faellt die USV-Kommunikation aus,
  * starb damit die Seite, statt die vorgesehene Fehler-XML zu liefern.
- * LoxBerry 4 liefert PHP 8.4.
+ *
+ * Zur Dringlichkeit: LoxBerry 3.0.0 bis 4.0 fahren PHP 7.4 - dort ist es noch
+ * eine Verwarnung. Zum Fehler wird es mit Debian 13 (Trixie), wo LoxBerry auf
+ * PHP 8 wechselt.
  *
  * Ausserdem rief die Originalfassung fest '/sbin/apcaccess' auf. Je nach
  * Debian-Fassung liegt das Programm woanders; jetzt wird gesucht.

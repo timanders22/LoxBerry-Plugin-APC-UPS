@@ -1,8 +1,15 @@
 <?php
 /**
- * APC-UPS - Meldung in den LoxBerry-Benachrichtigungsbereich legen
+ * APC-UPS NG - Meldung in den LoxBerry-Benachrichtigungsbereich legen
  *
- * Aufruf:  php apc_notify.php <Schwere 1-7> <Text>
+ * Aufruf:  php apc_notify.php <Schwere 1-7> <Text> [Pluginordner]
+ *
+ * Der Pluginordner wird als drittes Argument uebergeben, weil der Dienst
+ * ueber  su loxberry -c ...  gestartet wird und dabei die
+ * LoxBerry-Umgebungsvariablen verlorengehen. Ohne ihn fiele dieses Skript
+ * auf den fest eingetragenen Namen zurueck - wer das Plugin in einen
+ * anderen Ordner installiert hat, faende seine Warnung dann unter einem
+ * Paketnamen, den es nicht gibt, und damit gar nicht.
  *
  * Der Messdienst ist in Python geschrieben; fuer Benachrichtigungen gibt es
  * dort keine LoxBerry-Schnittstelle. Deshalb dieses Zwischenstueck, das
@@ -32,9 +39,14 @@ if (trim($text) === '') {
     exit(1);
 }
 
-$paket = getenv('LBPPLUGINDIR');
+// Reihenfolge: was der Dienst mitgibt, dann die Umgebung, dann der feste
+// Name. Das dritte Argument ist der verlaessliche Weg - siehe Kopf.
+$paket = isset($argv[3]) ? preg_replace('/[^A-Za-z0-9_\-]/', '', (string) $argv[3]) : '';
+if ($paket === '') {
+    $paket = (string) getenv('LBPPLUGINDIR');
+}
 if (!$paket) {
-    $paket = 'apc_ups';
+    $paket = 'apc_ups_ng';
 }
 
 if (!function_exists('notify_ext')) {
@@ -44,7 +56,7 @@ if (!function_exists('notify_ext')) {
 
 notify_ext(array(
     'PACKAGE'  => $paket,
-    'NAME'     => 'APC-UPS',
+    'NAME'     => 'APC-UPS NG',
     'MESSAGE'  => $text,
     'SEVERITY' => $schwere,
 ));

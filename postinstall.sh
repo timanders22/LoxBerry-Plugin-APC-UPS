@@ -1,27 +1,17 @@
 #!/bin/sh
 
 # To use important variables from command line use the following code:
-COMMAND=$0    # Zero argument is shell command
-PTEMPDIR=$1   # First argument is temp folder during install
 PSHNAME=$2    # Second argument is Plugin-Name for scipts etc.
 PDIR=$3       # Third argument is Plugin installation folder
-PVERSION=$4   # Forth argument is Plugin version
 #LBHOMEDIR=$5 # Comes from /etc/environment now.
 
-PCGI=$LBPCGI/$PDIR
-PHTML=$LBPHTML/$PDIR
-PTEMPL=$LBPTEMPL/$PDIR
-PDATA=$LBPDATA/$PDIR
 PLOG=$LBPLOG/$PDIR
-PCONFIG=$LBPCONFIG/$PDIR
-PSBIN=$LBPSBIN/$PDIR
-PBIN=$LBPBIN/$PDIR
 
 mkdir $PLOG
 touch $PLOG/$PSHNAME.log
 chown loxberry:loxberry $PLOG/$PSHNAME.log
 
-# --- APC-UPS --------------------------------------------------------------
+# --- APC-UPS NG --------------------------------------------------------------
 chmod 755 "$LBPBIN/$PDIR"/*.py 2>/dev/null
 
 # apcupsd muss laufen, sonst antwortet apcaccess nicht.
@@ -47,7 +37,15 @@ fi
 if command -v apcaccess >/dev/null 2>&1; then
     echo "<OK> apcaccess gefunden: $(command -v apcaccess)"
 else
-    echo "<WARNING> apcaccess fehlt. Nachinstallieren: sudo apt-get install -y apcupsd"
+    # apcaccess ist das Herzstueck - ohne es liefert das Plugin nichts.
+    # Trotzdem kein exit 1: apcupsd steht in dpkg/apt und wird von LoxBerry
+    # vor diesem Skript installiert. Schlaegt das einmal fehl (Paketquelle
+    # kurz nicht erreichbar), waere ein Abbruch der Installation die
+    # unbequemere Antwort als ein Hinweis - nachinstallieren geht jederzeit,
+    # eine zurueckgerollte Installation muss der Nutzer wiederholen.
+    echo "<FAIL> apcaccess fehlt - das Plugin kann ohne apcupsd nichts liefern."
+    echo "<FAIL> Nachinstallieren mit:  sudo apt-get install -y apcupsd"
+    echo "<FAIL> Danach im Reiter Test auf 'Jetzt abfragen' druecken."
 fi
 if python3 -c "import paho.mqtt.client" >/dev/null 2>&1; then
     echo "<OK> Python-Modul paho.mqtt vorhanden."

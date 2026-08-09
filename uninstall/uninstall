@@ -1,8 +1,42 @@
 #!/bin/bash
 # Wird als Benutzer "root" ausgefuehrt.
+#
+# LoxBerry uebergibt die ueblichen fuenf Argumente; gebraucht wird hier der
+# Installationsordner. Bis 1.1.0 stand in der Schleife unten "$LBPLOG/$PDIR",
+# aber $PDIR wurde NIE zugewiesen - der Pfad wurde damit zu "$LBPLOG//..."
+# und traf nie etwas. Aufgefallen ist das nicht, weil der erste Pfad
+# (/run/shm/apc_ups_ng.pid) im Normalfall zutrifft: apc_service.py legt die
+# PID-Datei dort ab, solange /run/shm existiert. Nur wenn es das NICHT tut -
+# und genau dafuer war der zweite Pfad gedacht -, lief das Beenden ins Leere.
+PDIR="${3:-apc-ups}"
+BASE="${5:-$LBHOMEDIR}"
+LOGDIR="${LBPLOG:-$BASE/log/plugins}"
 
-pkill -f apc_service.py >/dev/null 2>&1
-rm -f /run/shm/apc_ups_status.json /tmp/apc_ups_status.json
+# Dienst punktgenau ueber die PID-Datei beenden, nicht ueber pkill -f:
+# das haette jeden Prozess getroffen, in dessen Befehlszeile der Dateiname
+# vorkommt - auch einen offenen Editor.
+for PIDF in /run/shm/apc_ups_ng.pid "$LOGDIR/$PDIR/apc_ups_ng.pid"; do
+    [ -f "$PIDF" ] || continue
+    P=$(cat "$PIDF" 2>/dev/null)
+    if [ -n "$P" ] && kill -0 "$P" 2>/dev/null; then
+        kill "$P" 2>/dev/null
+        i=0
+        while [ $i -lt 10 ] && kill -0 "$P" 2>/dev/null; do
+            sleep 1
+            i=$((i + 1))
+        done
+        # Vor dem harten Beenden argumentweise gegenpruefen, nicht als
+        # Teilzeichenkette: Prozessnummern werden wiederverwendet, und ein
+        # kill -9 an den Falschen ist nicht rueckgaengig zu machen.
+        if kill -0 "$P" 2>/dev/null \
+           && tr '\0' '\n' < "/proc/$P/cmdline" 2>/dev/null \
+              | sed 's#.*/##' | grep -qx "apc_service.py"; then
+            kill -9 "$P" 2>/dev/null
+        fi
+    fi
+    rm -f "$PIDF"
+done
+rm -f /run/shm/apc_ups_ng_status.json /tmp/apc_ups_ng_status.json
 
 # apcupsd wird bewusst NICHT entfernt. Die Originalfassung rief hier
 #   sudo apt-get remove apcupsd

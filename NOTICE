@@ -1,0 +1,46 @@
+APC-UPS NG
+==========
+
+Dieses Werk steht unter der Apache License 2.0 (siehe LICENSE).
+
+Urspruengliches Werk
+--------------------
+APC-UPS
+Copyright Christian Woerstenfeld
+https://github.com/Woersty/LoxBerry-Plugin-APC-UPS
+Stand 2022.01.29, Apache License 2.0
+
+
+Aenderungen gegenueber dem Original (Apache License 2.0, Abschnitt 4 b)
+-----------------------------------------------------------------------
+
+1.0.0  Neufassung fuer LoxBerry 4. Statt einer Seite, die auf Zuruf apcaccess
+       aufruft, laeuft ein durchlaufender Dienst (bin/apc_service.py) und
+       meldet per MQTT. Oberflaeche nach LoxBerry-Hausstandard, PHP 8,
+       zweisprachig.
+
+1.1.0  Eigene Kennung und eigener Name: "APC-UPS NG", Ordner apc_ups_ng.
+
+       WARUM DIE KENNUNG WECHSELT: LoxBerry benutzt [AUTHOR] NAME und EMAIL
+       zusammen mit [PLUGIN] NAME als Kennung des Plugins, nicht als
+       Urhebervermerk. Bis 1.0.0 trug diese Fortfuehrung die Kennung des
+       fremden Plugins, zeigte mit AUTOMATIC_UPDATES aber auf ein anderes
+       Repository - eine Mischform, die LoxBerry nicht sauber aufloest. Und
+       Fehlerberichte waeren beim Originalautor gelandet, der mit dieser
+       Fassung nichts zu tun hat.
+
+       WARUM ZUSAETZLICH DER ORDNER: Mehrere Dateien liegen in einem von
+       allen Plugins geteilten Bereich - /run/shm/apc_ups_status.json und
+       /run/shm/apc_ups.pid. Waeren die geblieben, haetten sich Original und
+       Fortfuehrung bei paralleler Installation gegenseitig ueberschrieben.
+       Sie heissen jetzt apc_ups_ng_status.json und apc_ups_ng.pid.
+
+Die urheberrechtliche Nennung des Originalautors steht weiterhin in dieser
+Datei, im README, in der Hilfeseite und im Kopf beider Python-Dateien.
+
+
+Marken
+------
+APC und Smart-UPS sind Marken von Schneider Electric. Dieses Plugin steht in
+keiner Verbindung zu diesem Unternehmen und wird von ihm weder herausgegeben
+noch unterstuetzt.

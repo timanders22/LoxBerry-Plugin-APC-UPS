@@ -1,6 +1,6 @@
 <?php
 /**
- * APC-UPS - gemeinsame Hilfsfunktionen
+ * APC-UPS NG - gemeinsame Hilfsfunktionen
  *
  * Die Konfiguration liegt im selben Format, das bin/apc_common.py liest und
  * schreibt. Beide Seiten muessen sich hier einig sein.
@@ -34,25 +34,25 @@ function ap_paths()
         $dir = basename(dirname(dirname(__DIR__)));
     }
     if ($home && !is_dir($home . '/config/plugins/' . $dir)) {
-        foreach (array(basename(dirname(__DIR__)), 'apc_ups') as $cand) {
+        foreach (array(basename(dirname(__DIR__)), 'apc_ups_ng') as $cand) {
             if (is_dir($home . '/config/plugins/' . $cand)) {
                 $dir = $cand;
                 break;
             }
         }
     }
-    $status = is_dir('/run/shm') ? '/run/shm/apc_ups_status.json'
-                                 : '/tmp/apc_ups_status.json';
+    $status = is_dir('/run/shm') ? '/run/shm/apc_ups_ng_status.json'
+                                 : '/tmp/apc_ups_ng_status.json';
     if ($home) {
         $p = array('home' => $home, 'plugin' => $dir,
-                   'config' => $home . '/config/plugins/' . $dir . '/apc_ups.cfg',
+                   'config' => $home . '/config/plugins/' . $dir . '/apc_ups_ng.cfg',
                    'bindir' => $home . '/bin/plugins/' . $dir,
                    'logdir' => $home . '/log/plugins/' . $dir,
                    'status' => $status);
     } else {
         $base = dirname(dirname(__DIR__));
         $p = array('home' => '', 'plugin' => $dir,
-                   'config' => $base . '/config/apc_ups.cfg',
+                   'config' => $base . '/config/apc_ups_ng.cfg',
                    'bindir' => $base . '/bin',
                    'logdir' => sys_get_temp_dir(),
                    'status' => $status);
@@ -119,17 +119,30 @@ function ap_config_write($werte)
 {
     $file = ap_paths()['config'];
     @mkdir(dirname($file), 0775, true);
-    $txt = "; APC-UPS\n; Geschrieben von der Plugin-Oberflaeche.\n\n[apc_ups]\n";
+    $txt = "; APC-UPS NG\n; Geschrieben von der Plugin-Oberflaeche.\n\n[apc_ups_ng]\n";
     foreach (ap_defaults() as $k => $vorgabe) {
         $v = array_key_exists($k, $werte) ? $werte[$k] : $vorgabe;
         $v = str_replace(array("\r", "\n"), array('', ' '), (string) $v);
         $txt .= $k . '=' . trim($v) . "\n";
     }
-    $ok = @file_put_contents($file, $txt) !== false;
-    if ($ok) {
-        @chmod($file, 0644);
+    // Erst daneben schreiben, dann umbenennen.
+    //
+    // Ausgerechnet bei einem USV-Plugin ist der Stromausfall waehrend des
+    // Schreibens kein theoretischer Fall - er ist der Anlass, aus dem es das
+    // Plugin gibt. file_put_contents kuerzt die Datei sofort auf null und
+    // fuellt sie erst danach; faellt der Strom dazwischen, ist die
+    // Konfiguration weg. rename() ist auf demselben Dateisystem unteilbar.
+    $neben = $file . '.neu';
+    if (@file_put_contents($neben, $txt) !== strlen($txt)) {
+        @unlink($neben);
+        return false;
     }
-    return $ok;
+    @chmod($neben, 0644);
+    if (!@rename($neben, $file)) {
+        @unlink($neben);
+        return false;
+    }
+    return true;
 }
 
 function ap_status()
@@ -151,11 +164,38 @@ function ap_status_alter()
     return max(0, time() - (int) $s['zeit']);
 }
 
+/** Pfad der PID-Datei, die der Dienst selbst schreibt und sperrt. */
+function ap_pid_datei()
+{
+    return is_dir('/run/shm') ? '/run/shm/apc_ups_ng.pid'
+                              : ap_paths()['logdir'] . '/apc_ups_ng.pid';
+}
+
+/**
+ * Prozessnummer des laufenden Dienstes, oder 0.
+ *
+ * Frueher stand hier  pgrep -o -f apc_service.py.  Das trifft jeden Prozess,
+ * in dessen Befehlszeile die Zeichenkette vorkommt - auch einen Editor, der
+ * die Datei geoeffnet hat, oder ein Sicherungsskript, das den Ordner
+ * durchsucht. Zum Nachsehen war das ungenau, zum Beenden gefaehrlich.
+ */
 function ap_dienst_pid()
 {
-    $out = array();
-    @exec('pgrep -o -f apc_service.py 2>/dev/null', $out);
-    return $out ? (int) $out[0] : 0;
+    $f = ap_pid_datei();
+    if (!is_file($f)) {
+        return 0;
+    }
+    $pid = (int) trim((string) @file_get_contents($f));
+    if ($pid <= 0) {
+        return 0;
+    }
+    // Lebt der Prozess, und ist er wirklich unserer? Prozessnummern werden
+    // wiederverwendet.
+    if (!@file_exists('/proc/' . $pid)) {
+        return 0;
+    }
+    $cmd = (string) @file_get_contents('/proc/' . $pid . '/cmdline');
+    return strpos($cmd, 'apc_service.py') !== false ? $pid : 0;
 }
 
 function ap_dienst($aktion)
@@ -164,14 +204,37 @@ function ap_dienst($aktion)
     $skript = $p['bindir'] . '/apc_service.py';
     $meldungen = array();
     if (in_array($aktion, array('stop', 'restart'), true)) {
-        @exec('pkill -f apc_service.py 2>&1', $meldungen);
-        sleep(2);
+        $pid = ap_dienst_pid();
+        if ($pid > 0) {
+            // Punktgenau beenden, nicht ueber die Befehlszeile suchen.
+            @exec('kill ' . (int) $pid . ' 2>&1', $meldungen);
+            for ($i = 0; $i < 10 && ap_dienst_pid() === $pid; $i++) {
+                sleep(1);
+            }
+            if (ap_dienst_pid() === $pid) {
+                @exec('kill -9 ' . (int) $pid . ' 2>&1', $meldungen);
+                sleep(1);
+            }
+            $meldungen[] = 'Dienst ' . $pid . ' beendet.';
+        } else {
+            $meldungen[] = 'Es lief kein Dienst.';
+        }
     }
     if (in_array($aktion, array('start', 'restart'), true)) {
         if (!is_file($skript)) {
             return 'Dienst nicht gefunden: ' . $skript;
         }
-        $log = $p['logdir'] . '/apc_ups.log';
+        // Vorher nachsehen. Ohne diese Pruefung startete jeder Klick auf
+        // Speichern eine weitere Fassung - mehrere Dienste fragten dann
+        // dieselbe USV ab und ueberholten sich beim Schreiben nach MQTT.
+        // Der Dienst selbst haelt zusaetzlich eine Dateisperre; das hier
+        // erspart den unnoetigen Start und die irritierende Logzeile.
+        $schon = ap_dienst_pid();
+        if ($schon > 0) {
+            $meldungen[] = 'Dienst laeuft bereits (PID ' . $schon . ') - kein zweiter Start.';
+            return implode("\n", $meldungen);
+        }
+        $log = $p['logdir'] . '/apc_ups_ng.log';
         @exec('nohup ' . escapeshellarg($skript) . ' >> ' . escapeshellarg($log)
             . ' 2>&1 & echo gestartet', $meldungen);
         sleep(3);
@@ -227,6 +290,8 @@ function ap_status_themen()
         'serial'                => array('Seriennummer', 'text'),
         'battery_date'          => array('Datum des letzten Akkutauschs', 'text'),
         'valid'                 => array('1 = die letzte Abfrage war brauchbar', 'digital'),
+        'data_valid'            => array('1 = die USV antwortet wirklich. <b>0 bedeutet COMMLOST</b> &mdash; apcaccess liefert dann zwar einen vollstaendig aussehenden Datensatz, aber die Zahlen darin sind wertlos.', 'digital'),
+        'comm_lost'             => array('1 = die Verbindung zur USV ist abgerissen (USB-Kabel, apcupsd)', 'digital'),
         'service/online'        => array('1 = der Dienst l&auml;uft', 'digital'),
         'last_error'            => array('letzte Fehlermeldung, sonst leer', 'text'),
     );
@@ -302,7 +367,7 @@ function ap_xml_virtual_in_http($kopf, $cmds)
 function ap_vorlage($cfg, $art)
 {
     $praefix = ap_cfg($cfg, 'themenpraefix', 'apcups');
-    $fuss = 'Erzeugt vom LoxBerry-Plugin APC-UPS (' . date('d.m.Y') . ')';
+    $fuss = 'Erzeugt vom LoxBerry-Plugin APC-UPS NG (' . date('d.m.Y') . ')';
 
     if ($art === 'xml_in') {
         // Der alte Weg: Loxone holt die XML-Seite selbst und zieht die Werte
@@ -317,8 +382,8 @@ function ap_vorlage($cfg, $art)
             $cmds[] = array('title' => 'APCUPS_' . $feld, 'comment' => $bed,
                             'check' => '<' . $feld . '>\v');
         }
-        return array('apc_ups_xml.xml', ap_xml_virtual_in_http(array(
-            'title'   => 'APC-UPS (XML)',
+        return array('apc_ups_ng_xml.xml', ap_xml_virtual_in_http(array(
+            'title'   => 'APC-UPS NG (XML)',
             'address' => 'http://' . $host . '/plugins/' . ap_paths()['plugin'] . '/index.php',
             'polling' => '60',
             'comment' => $fuss,
@@ -333,8 +398,8 @@ function ap_vorlage($cfg, $art)
             'check'   => ' ',
         );
     }
-    return array('apc_ups_eingaenge.xml', ap_xml_virtual_in_http(array(
-        'title'   => 'APC-UPS',
+    return array('apc_ups_ng_eingaenge.xml', ap_xml_virtual_in_http(array(
+        'title'   => 'APC-UPS NG',
         'address' => 'http://localhost',
         'polling' => '604800',
         'comment' => $fuss,
@@ -368,6 +433,40 @@ function ap_sprache()
  * beim Durchsehen sofort auf, was noch fehlt, statt dass die Seite leer
  * bleibt.
  */
+/**
+ * Gibt es diesen Benutzer auf dem Geraet?
+ *
+ * Fuer den Mailempfaenger reicht "sieht aus wie ein Benutzername" nicht:
+ * "meine_email" sieht genauso aus wie "root", ist aber ein Vertipper. Eine
+ * Warnung bei Stromausfall an einen Benutzer zu schicken, den es nicht gibt,
+ * ist dasselbe wie sie nicht zu schicken - nur merkt es niemand.
+ *
+ * Geprueft wird gegen die Benutzerdatenbank, nicht gegen /etc/passwd allein:
+ * posix_getpwnam kennt auch Benutzer aus LDAP oder aehnlichem. Fehlt die
+ * Erweiterung, wird /etc/passwd gelesen.
+ */
+function ap_benutzer_existiert($name)
+{
+    $name = trim((string) $name);
+    if ($name === '' || !preg_match('/^[A-Za-z_][A-Za-z0-9._-]{0,31}$/', $name)) {
+        return false;
+    }
+    if (function_exists('posix_getpwnam')) {
+        return @posix_getpwnam($name) !== false;
+    }
+    $passwd = @file('/etc/passwd', FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    if (!$passwd) {
+        // Ohne Auskunft lieber durchlassen als eine gueltige Eingabe abweisen.
+        return true;
+    }
+    foreach ($passwd as $zeile) {
+        if (strpos($zeile, $name . ':') === 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function ap_t($schluessel)
 {
     static $texte = null;

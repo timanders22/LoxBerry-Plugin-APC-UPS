@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-APC-UPS - gemeinsame Grundlagen
+APC-UPS NG - gemeinsame Grundlagen
 
 Pfade, Konfiguration, Auswertung von apcaccess und die Umrechnung in
 MQTT-Themen liegen hier, damit Dienst, Einmalabfrage und der alte
@@ -19,7 +19,7 @@ import subprocess
 
 PLUGIN_NAME = "REPLACELBPPLUGINDIR"
 if PLUGIN_NAME.startswith("REPLACE"):
-    PLUGIN_NAME = "apc_ups"
+    PLUGIN_NAME = "apc_ups_ng"
 
 CONFIG_DIR = "REPLACELBPCONFIGDIR"
 if CONFIG_DIR.startswith("REPLACE"):
@@ -30,10 +30,36 @@ if LOG_DIR.startswith("REPLACE"):
     LOG_DIR = "/opt/loxberry/log/plugins/" + PLUGIN_NAME
 
 HOME_DIR = os.environ.get("LBHOMEDIR", "/opt/loxberry")
-CONFIG_FILE = os.path.join(CONFIG_DIR, "apc_ups.cfg")
-STATUS_FILE = "/run/shm/apc_ups_status.json"
+CONFIG_FILE = os.path.join(CONFIG_DIR, "apc_ups_ng.cfg")
+def _zeitzone_setzen():
+    """Zeitzone des Systems uebernehmen.
+
+    Ohne sie protokolliert Python in UTC, waehrend die Oberflaeche Ortszeit
+    zeigt - beim Vergleich zweier Zeitstempel sucht man den Fehler dann in
+    der USV. Genommen wird, was eingestellt ist, nicht fest Europe/Berlin.
+    """
+    if os.environ.get("TZ"):
+        return os.environ["TZ"]
+    tz = ""
+    try:
+        with open("/etc/timezone", encoding="utf-8") as fh:
+            tz = fh.read().strip()
+    except OSError:
+        tz = ""
+    if tz:
+        os.environ["TZ"] = tz
+        try:
+            time.tzset()
+        except AttributeError:
+            pass
+    return tz
+
+
+ZEITZONE = _zeitzone_setzen()
+
+STATUS_FILE = "/run/shm/apc_ups_ng_status.json"
 if not os.path.isdir("/run/shm"):
-    STATUS_FILE = "/tmp/apc_ups_status.json"
+    STATUS_FILE = "/tmp/apc_ups_ng_status.json"
 
 def version():
     """Fassung aus der Plugindatenbank von LoxBerry.
@@ -116,15 +142,32 @@ def konfiguration_schreiben(werte, pfad=None):
         os.makedirs(os.path.dirname(pfad), exist_ok=True)
     except OSError:
         pass
-    zeilen = ["; APC-UPS", "; Geschrieben von der Plugin-Oberflaeche.", "", "[apc_ups]"]
+    zeilen = ["; APC-UPS NG", "; Geschrieben von der Plugin-Oberflaeche.", "", "[apc_ups_ng]"]
     for schluessel, vorgabe in VORGABEN.items():
         zeilen.append("{0}={1}".format(schluessel, werte.get(schluessel, vorgabe)))
+    # Erst daneben schreiben, dann umbenennen.
+    #
+    # Ausgerechnet bei einem USV-Plugin ist der Stromausfall waehrend des
+    # Schreibens kein theoretischer Fall - es ist der Fall, fuer den es das
+    # Plugin gibt. Ein direktes open(..., "w") kuerzt die Datei sofort auf
+    # null und fuellt sie erst danach; faellt der Strom dazwischen, ist die
+    # Konfiguration weg. rename() ist auf demselben Dateisystem unteilbar:
+    # der Leser sieht entweder die alte oder die neue Fassung.
+    neben = pfad + ".neu"
+    inhalt = "\n".join(zeilen) + "\n"
     try:
-        with open(pfad, "w", encoding="utf-8") as fh:
-            fh.write("\n".join(zeilen) + "\n")
-        os.chmod(pfad, 0o644)
+        with open(neben, "w", encoding="utf-8") as fh:
+            fh.write(inhalt)
+            fh.flush()
+            os.fsync(fh.fileno())   # ohne fsync liegt der Inhalt nur im Puffer
+        os.chmod(neben, 0o644)
+        os.replace(neben, pfad)
         return True
     except OSError:
+        try:
+            os.unlink(neben)
+        except OSError:
+            pass
         return False
 
 
@@ -271,8 +314,21 @@ def messwerte(roh):
     nenn = wert_zahl(roh, "NOMPOWER")
     watt = round(nenn * last / 100.0, 1) if (last is not None and nenn) else None
 
+    # Ist die Verbindung zur USV tot, sind die Zahlen daneben wertlos.
+    #
+    # apcaccess liefert auch dann Rueckgabewert 0 und einen vollstaendig
+    # aussehenden Datensatz, wenn das USB-Kabel gezogen ist - der Status heisst
+    # dann COMMLOST, und Ladung, Last und Restlaufzeit stehen auf den zuletzt
+    # bekannten oder auf 0. Wer nur den Rueckgabewert prueft, meldet Loxone
+    # eine erreichbare USV mit 0 Prozent Last. Deshalb ein eigenes Feld:
+    # der Miniserver soll unterscheiden koennen zwischen "die USV sagt 0" und
+    # "wir wissen es nicht".
+    verbindung_weg = any(z in status for z in ("COMMLOST", "NOCOMM", "COMMFAULT"))
+
     return {
         "status":                status,
+        "data_valid":            0 if verbindung_weg else 1,
+        "comm_lost":             1 if verbindung_weg else 0,
         "on_line":               1 if netz else 0,
         "on_battery":            1 if akku else 0,
         "battery_charge":        wert_zahl(roh, "BCHARGE"),
@@ -355,7 +411,13 @@ def benachrichtigen(text, schwere="warning"):
         return False
     stufe = {"error": "3", "warning": "4", "info": "6"}.get(schwere, "4")
     try:
-        lauf = subprocess.run(["php", helfer, stufe, text],
+        # Den Pluginordner ausdruecklich mitgeben. Der Dienst wird ueber
+        # su loxberry -c gestartet, und das raeumt die LoxBerry-Umgebung ab -
+        # getenv('LBPPLUGINDIR') im Helfer waere leer. Der Rueckfall dort
+        # traegt den festen Namen apc_ups_ng; wer das Plugin in einen anderen
+        # Ordner installiert hat, faende seine Warnung dann unter einem
+        # Paketnamen, den LoxBerry nicht kennt, und damit gar nicht.
+        lauf = subprocess.run(["php", helfer, stufe, text, PLUGIN_NAME],
                               capture_output=True, text=True, timeout=15)
         return lauf.returncode == 0
     except (OSError, subprocess.SubprocessError):

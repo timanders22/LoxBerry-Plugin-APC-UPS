@@ -1,15 +1,64 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- APC-UPS - Plugin-Symbol.
-     Hausstandard: gruene Scheibe, weisse Zeichnung.
-     Dargestellt: ein Akku mit Blitz - die USV, die einspringt. -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <circle cx="256" cy="256" r="256" fill="#6dac20"/>
+<svg width="512" height="512" viewBox="0 0 512 512" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg-grad" cx="50%" cy="50%" r="50%" fx="35%" fy="35%">
+      <stop offset="0%" stop-color="#7dc424" />
+      <stop offset="65%" stop-color="#6dac20" />
+      <stop offset="100%" stop-color="#568819" />
+    </radialGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.25"/>
+    </filter>
+  </defs>
 
-  <!-- Akkugehaeuse -->
-  <rect x="96" y="150" width="300" height="212" rx="26" fill="none" stroke="#ffffff" stroke-width="26"/>
-  <!-- Pluspol -->
-  <rect x="396" y="212" width="34" height="88" rx="12" fill="#ffffff"/>
+  <!-- Outer Badge Ring -->
+  <circle cx="256" cy="256" r="246" fill="url(#bg-grad)" />
+  <circle cx="256" cy="256" r="232" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="3" />
 
-  <!-- Blitz im Akku -->
-  <path d="M 268 178 L 186 268 L 240 268 L 224 334 L 306 244 L 252 244 Z" fill="#ffffff"/>
+  <g filter="url(#shadow)" fill="#ffffff">
+    <!-- UPS Tower Main Body -->
+    <rect x="191" y="80" width="130" height="210" rx="16" fill="#ffffff" />
+    
+    <!-- Feet -->
+    <rect x="201" y="290" width="30" height="10" rx="4" fill="#ffffff" />
+    <rect x="281" y="290" width="30" height="10" rx="4" fill="#ffffff" />
+
+    <!-- Power Button Ring Cutout -->
+    <circle cx="256" cy="112" r="16" fill="#6dac20" />
+    <path d="M 256 100 A 10 10 0 1 1 255.9 100" fill="none" stroke="#ffffff" stroke-width="3" />
+    <line x1="256" y1="98" x2="256" y2="108" stroke="#ffffff" stroke-width="3" stroke-linecap="round" />
+
+    <!-- Display / Status Bar Cutout -->
+    <rect x="211" y="138" width="90" height="14" rx="4" fill="#6dac20" />
+    <circle cx="225" cy="145" r="3" fill="#ffffff" />
+    <circle cx="239" cy="145" r="3" fill="#ffffff" />
+    <rect x="251" y="143" width="40" height="4" rx="2" fill="#ffffff" />
+
+    <!-- Front Ventilation Grille Slots -->
+    <rect x="211" y="175" width="90" height="8" rx="3" fill="#6dac20" />
+    <rect x="211" y="190" width="90" height="8" rx="3" fill="#6dac20" />
+    <rect x="211" y="205" width="90" height="8" rx="3" fill="#6dac20" />
+    <rect x="211" y="220" width="90" height="8" rx="3" fill="#6dac20" />
+
+    <!-- Shield Symbol (Left: Protection) -->
+    <g transform="translate(140, 150)">
+      <path d="M 0 -25 L 22 -15 L 22 10 Q 22 25 0 30 Q -22 25 -22 10 L -22 -15 Z" fill="#ffffff" />
+      <path d="M -8 -2 L -2 5 L 8 -7" fill="none" stroke="#6dac20" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+    </g>
+
+    <!-- Power Plug Symbol (Right: Mains/Grid Power) -->
+    <g transform="translate(370, 150)">
+      <rect x="-16" y="-12" width="32" height="24" rx="4" fill="#ffffff" />
+      <rect x="-10" y="-24" width="6" height="12" rx="1" fill="#ffffff" />
+      <rect x="4" y="-24" width="6" height="12" rx="1" fill="#ffffff" />
+      <line x1="0" y1="12" x2="0" y2="30" stroke="#ffffff" stroke-width="5" stroke-linecap="round" />
+    </g>
+
+    <!-- Dashed Line -->
+    <path d="M 150 345 L 362 345" stroke="#ffffff" stroke-width="4" stroke-dasharray="6 8" opacity="0.8" />
+  </g>
+
+  <!-- Typography -->
+  <text x="256" y="380" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="bold" font-size="22" letter-spacing="2">APC UPS</text>
+  <text x="256" y="425" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="900" font-size="38" letter-spacing="3">LOXBERRY</text>
 </svg>

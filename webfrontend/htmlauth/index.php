@@ -1,6 +1,6 @@
 <?php
 /**
- * APC-UPS - Admin-Oberflaeche
+ * APC-UPS NG - Admin-Oberflaeche
  * Reiter: Einstellungen | Einbindung in Loxone | Test | Logdateien
  *
  * Loest die Perl-CGI-Oberflaeche der Originalfassung ab (index.cgi mit
@@ -71,8 +71,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     $neu['benachrichtigung'] = isset($_POST['benachrichtigung']) ? '1' : '0';
     $neu['email']            = isset($_POST['email']) ? '1' : '0';
     $an = $saeubern($_POST['email_an'] ?? '');
-    $neu['email_an'] = preg_match('/^[A-Za-z0-9._%+-]+(@[A-Za-z0-9.-]+\.[A-Za-z]{2,})?$/', $an)
-        ? $an : 'root';
+    // Der ganze Domainteil war frueher optional (das Fragezeichen am Ende
+    // des Ausdrucks). Damit ging zwar der beabsichtigte oertliche Empfaenger
+    // "root" durch - aber genauso jeder Vertipper wie "meine_email", der
+    // dann kommentarlos an sendmail wanderte und nirgends ankam.
+    // Jetzt: entweder ein oertlicher Benutzername, oder eine Adresse, die
+    // PHP selbst fuer gueltig haelt.
+    if (strpos($an, '@') === false && ap_benutzer_existiert($an)) {
+        $neu['email_an'] = $an;                       // oertlicher Benutzer, z. B. root
+    } elseif (filter_var($an, FILTER_VALIDATE_EMAIL)) {
+        $neu['email_an'] = $an;
+    } else {
+        $neu['email_an'] = 'root';
+        if ($an !== '') {
+            $ap_hinweis = ap_t('EINST.EMAIL_UNGUELTIG');
+        }
+    }
 
     $praefix = preg_replace('/[^A-Za-z0-9_\/-]+/', '', $saeubern($_POST['themenpraefix'] ?? ''));
     $neu['themenpraefix'] = $praefix !== '' ? $praefix : 'apcups';
@@ -85,8 +99,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     $host = $saeubern($_POST['host'] ?? '');
     $neu['host'] = preg_match('/^[A-Za-z0-9._-]+(:[0-9]{1,5})?$/', $host) ? $host : '';
     if ($host !== '' && $neu['host'] === '') {
-        $ap_error = 'Der eingetragene USV-Host sieht nicht wie ein Rechnername oder '
-            . 'eine Adresse aus und wurde verworfen.';
+        $ap_error = ap_t('TEXT.HOST_UNGUELTIG');
     }
 
     if (ap_config_write($neu)) {
@@ -94,11 +107,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
         require_once __DIR__ . '/ap_test.php';
         ap_dienst('restart');
         $ap_hinweis = ap_dienst_pid()
-            ? 'Der Dienst wurde neu gestartet.'
-            : 'Der Dienst l&auml;uft nicht &mdash; siehe Reiter Logdateien.';
+            ? ap_t('TEXT.DIENST_NEU_GESTARTET')
+            : ap_t('TEXT.DIENST_LAEUFT_NICHT');
         list($ap_cfg, $ap_altformat) = ap_config_read();
     } else {
-        $ap_error = 'Die Konfigurationsdatei konnte nicht geschrieben werden: ' . ap_e($ap_p['config']);
+        $ap_error = ap_t('TEXT.SCHREIBFEHLER') . ' ' . ap_e($ap_p['config']);
     }
 }
 
@@ -113,7 +126,10 @@ $ap_w       = ($ap_status && !empty($ap_status['werte'])) ? $ap_status['werte'] 
 
 $ap_frame = class_exists('LBWeb', false);
 if ($ap_frame) {
-    LBWeb::lbheader('APC-UPS', 'https://wiki.loxberry.de/plugins/apc_ups/start', 'help.html');
+    // Der Verweis zeigt auf DIESES Repository, nicht auf die Wiki-Seite des
+    // Originalplugins: die beschreibt eine andere Fassung mit anderer
+    // Bedienung, und Rueckfragen dazu gehoeren nicht zum Originalautor.
+    LBWeb::lbheader('APC-UPS NG', 'https://github.com/timanders22/LoxBerry-Plugin-APC-UPS', 'help.html');
 }
 ?>
 <style>
@@ -199,21 +215,21 @@ if ($ap_frame) {
     $lad = $ap_w['battery_charge'];
     $akku = (int) $ap_w['on_battery'] === 1; ?>
 <h2><?php echo ap_t('TEXT.AKTUELLER_ZUSTAND'); ?></h2>
-<div class="sm-gross"><?= ap_e($ap_w['status']) ?><?= $akku ? ' &mdash; Netzausfall' : '' ?></div>
+<div class="sm-gross"><?= ap_e($ap_w['status']) ?><?= $akku ? ' &mdash; ' . ap_t('TEXT.NETZAUSFALL') : '' ?></div>
 <?php if ($lad !== null) { ?>
 <div class="sm-akku<?= ($lad < 50 || $akku) ? ' sm-warn' : '' ?>"><i style="width: <?= (float) $lad ?>%;"></i></div>
 <div class="sm-small"><?php echo ap_t('TEXT.AKKU_2'); ?> <?= ap_e($lad) ?>&nbsp;%<?php
-if ($ap_w['time_left'] !== null) { echo ' &middot; noch rund ' . ap_e($ap_w['time_left']) . ' Minuten'; }
-if ($ap_w['load_watt'] !== null) { echo ' &middot; Last ' . ap_e($ap_w['load_watt']) . ' W'; }
-?> &middot; Stand vor <?= $ap_alter ?> <?php echo ap_t('TEXT.SEKUNDEN'); ?></div>
+if ($ap_w['time_left'] !== null) { echo ' &middot; ' . ap_t('TEXT.NOCH_RUND') . ' ' . ap_e($ap_w['time_left']) . ' ' . ap_t('TEXT.MINUTEN'); }
+if ($ap_w['load_watt'] !== null) { echo ' &middot; ' . ap_t('TEXT.LAST') . ' ' . ap_e($ap_w['load_watt']) . ' W'; }
+?> <?php echo ap_t('TEXT.STAND_VOR'); ?> <?= $ap_alter ?> <?php echo ap_t('TEXT.SEKUNDEN'); ?></div>
 <?php } ?>
 <table class="sm-tbl" style="margin-top:10px;">
 <tr><th style="width:34%;"><?php echo ap_t('TEXT.MODELL'); ?></th><td><?= ap_e($ap_w['model']) ?></td></tr>
 <tr><th><?php echo ap_t('TEXT.NETZSPANNUNG'); ?></th><td><?= $ap_w['line_voltage'] === null ? '&ndash;' : ap_e($ap_w['line_voltage']) . ' V' ?></td></tr>
 <tr><th><?php echo ap_t('TEXT.AKKUSPANNUNG'); ?></th><td><?= $ap_w['battery_voltage'] === null ? '&ndash;' : ap_e($ap_w['battery_voltage']) . ' V' ?></td></tr>
-<tr><th><?php echo ap_t('TEXT.AKKU_EINGEBAUT'); ?></th><td><?= ap_e($ap_w['battery_date']) ?><?= $ap_w['replace_battery'] ? ' &mdash; <b>Austausch f&auml;llig</b>' : '' ?></td></tr>
+<tr><th><?php echo ap_t('TEXT.AKKU_EINGEBAUT'); ?></th><td><?= ap_e($ap_w['battery_date']) ?><?= $ap_w['replace_battery'] ? ' &mdash; <b>' . ap_t('TEXT.AUSTAUSCH_FLLIG') . '</b>' : '' ?></td></tr>
 <tr><th><?php echo ap_t('TEXT.UMSCHALTUNGEN'); ?></th><td><?= $ap_w['transfers'] === null ? '&ndash;' : ap_e($ap_w['transfers']) ?><?php
-if ($ap_w['last_transfer'] !== '') { echo ' &middot; zuletzt: ' . ap_e($ap_w['last_transfer']); } ?></td></tr>
+if ($ap_w['last_transfer'] !== '') { echo ' &middot; ' . ap_t('TEXT.ZULETZT') . ' ' . ap_e($ap_w['last_transfer']); } ?></td></tr>
 </table>
 <?php } else { ?>
 <div class="sm-alert sm-info"><?php echo ap_t('TEXT.NOCH_KEINE_WERTE_DER_REITER'); ?> <b><?php echo ap_t('TEXT.TEST'); ?></b> <?php echo ap_t('TEXT.ZEIGT_MIT'); ?>
@@ -287,7 +303,7 @@ if ($ap_w['last_transfer'] !== '') { echo ' &middot; zuletzt: ' . ap_e($ap_w['la
 <div class="sm-pane" id="tab-loxone">
 
 <h2><?php echo ap_t('TEXT.IN_DREI_SCHRITTEN_EINGERICHTET'); ?></h2>
-<div class="sm-step"><b><?php echo ap_t('TEXT.1_USV_PRFEN'); ?></b> <?php echo ap_t('TEXT.IM_REITER_TEST_MIT'); ?> <i>Jetzt abfragen</i><?php echo ap_t('TEXT.KOMMEN_DORT_WERTE_IST_DER_SCHWIERI'); ?></div>
+<div class="sm-step"><b><?php echo ap_t('TEXT.1_USV_PRFEN'); ?></b> <?php echo ap_t('TEXT.IM_REITER_TEST_MIT'); ?> <i><?php echo ap_t('TEXT.JETZT_ABFRAGEN'); ?></i><?php echo ap_t('TEXT.KOMMEN_DORT_WERTE_IST_DER_SCHWIERI'); ?></div>
 <div class="sm-step"><b><?php echo ap_t('TEXT.2_VORLAGE_HERUNTERLADEN'); ?></b> <?php echo ap_t('TEXT.UNTEN_UND_IN_LOXONE_CONFIG_EINLESE'); ?> <i><?php echo ap_t('TEXT.VORLAGE_EINFGEN'); ?></i>.</div>
 <div class="sm-step"><b><?php echo ap_t('TEXT.3_EINGNGE_MIT_DEM_MQTT_GATEWAY_VER'); ?></b> <?php echo ap_t('TEXT.DIE_VORLAGE_LEGT_NUR_DIE_NAMEN_AN_'); ?> <i><?php echo ap_t('TEXT.INCOMING_OVERVIEW'); ?></i> <?php echo ap_t('TEXT.ERSCHEINEN_DIE_THEMEN_SOBALD_DER_D'); ?></div>
 
@@ -361,7 +377,7 @@ if ($ap_w['last_transfer'] !== '') { echo ' &middot; zuletzt: ' . ap_e($ap_w['la
 
 <h3 class="sm-h3"><?php echo ap_t('TEXT.LST_ETWAS_AUS'); ?></h3>
 <div class="sm-knopfreihe">
-<form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-test"><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="abfragen">Jetzt abfragen</button></form>
+<form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-test"><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="abfragen"><?php echo ap_t('TEXT.JETZT_ABFRAGEN'); ?></button></form>
 <form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-test"><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="melden"><?php echo ap_t('TEXT.TESTMELDUNG_ABLEGEN'); ?></button></form>
 <form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-test"><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="restart"><?php echo ap_t('TEXT.DIENST_NEU_STARTEN'); ?></button></form>
 <form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-test"><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="stop"><?php echo ap_t('TEXT.DIENST_ANHALTEN'); ?></button></form>
@@ -380,9 +396,9 @@ if ($ap_w['last_transfer'] !== '') { echo ' &middot; zuletzt: ' . ap_e($ap_w['la
 <h2><?php echo ap_t('TEXT.PROTOKOLL'); ?></h2>
 <div class="sm-small">
 <?php if ($ap_log !== '') { ?>
-<?php echo ap_t('TEXT.DATEI'); ?> <span class="sm-mono"><?= ap_e($ap_log) ?></span> &middot; neueste Zeile zuerst
+<?php echo ap_t('TEXT.DATEI'); ?> <span class="sm-mono"><?= ap_e($ap_log) ?></span> <?php echo ap_t('TEXT.LOG_NEUESTE'); ?>
 <?php } else { ?>
-Noch keine Protokolldatei vorhanden. Sie entsteht, sobald der Dienst das erste Mal l&auml;uft.
+<?php echo ap_t('TEXT.LOG_LEER'); ?>
 <?php } ?>
 </div>
 <?php if ($ap_zeilen) { ?>
