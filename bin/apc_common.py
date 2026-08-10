@@ -17,19 +17,39 @@ import re
 import shutil
 import subprocess
 
+
+def lb_wurzel_ermitteln():
+    """Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
+
+    Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
+    config/plugins UND webfrontend enthaelt. Trifft die uebliche
+    Installation genauso wie eine an einem anderen Ort.
+    """
+    d = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(8):
+        if os.path.isdir(os.path.join(d, "config", "plugins")) \
+                and os.path.isdir(os.path.join(d, "webfrontend")):
+            return d
+        eltern = os.path.dirname(d)
+        if eltern == d:
+            break
+        d = eltern
+    return ""
+
+
 PLUGIN_NAME = "REPLACELBPPLUGINDIR"
 if PLUGIN_NAME.startswith("REPLACE"):
     PLUGIN_NAME = "apc_ups_ng"
 
 CONFIG_DIR = "REPLACELBPCONFIGDIR"
 if CONFIG_DIR.startswith("REPLACE"):
-    CONFIG_DIR = "/opt/loxberry/config/plugins/" + PLUGIN_NAME
+    CONFIG_DIR = lb_wurzel_ermitteln() + "/config/plugins/" + PLUGIN_NAME
 
 LOG_DIR = "REPLACELBPLOGDIR"
 if LOG_DIR.startswith("REPLACE"):
-    LOG_DIR = "/opt/loxberry/log/plugins/" + PLUGIN_NAME
+    LOG_DIR = lb_wurzel_ermitteln() + "/log/plugins/" + PLUGIN_NAME
 
-HOME_DIR = os.environ.get("LBHOMEDIR", "/opt/loxberry")
+HOME_DIR = os.environ.get("LBHOMEDIR") or lb_wurzel_ermitteln()
 CONFIG_FILE = os.path.join(CONFIG_DIR, "apc_ups_ng.cfg")
 def _zeitzone_setzen():
     """Zeitzone des Systems uebernehmen.
