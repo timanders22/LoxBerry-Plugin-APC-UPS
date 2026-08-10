@@ -7,9 +7,18 @@ PDIR=$3       # Third argument is Plugin installation folder
 PLOG=$LBPLOG/$PDIR
 PCONFIG=$LBPCONFIG/$PDIR
 
+# Der Sicherungsordner liegt unter data/, NICHT unter /tmp.
+#
+# /tmp ist auf dem LoxBerry eine Ramdisk: bricht die Installation ab oder
+# startet der Rechner dazwischen neu, ist die Sicherung weg. Und /tmp ist fuer
+# jeden lesbar. Geaendert am 10.08.2026 nach der Durchsicht aller Plugins.
+SICHER="$LBPDATA/$PDIR/upgrade_sicherung"
 echo "<INFO> Backing up existing config files"
-mkdir /tmp/${PDIR}.SAVE
-cp -v -r $PCONFIG/* /tmp/${PDIR}.SAVE/ 2>/dev/null
+rm -rf "$SICHER" 2>/dev/null
+mkdir -p "$SICHER"
+chmod 0700 "$SICHER" 2>/dev/null
+cp -a "$PCONFIG/." "$SICHER/" 2>/dev/null \
+    && echo "<OK> Konfiguration gesichert nach $SICHER (Rechte 0700)."
 
 # Laufenden Dienst anhalten, damit er nicht in die neue Fassung hineinlaeuft.
 #

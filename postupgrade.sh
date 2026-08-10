@@ -13,9 +13,18 @@ echo "<INFO> Copy back existing config files"
 # nach dem ersten Update keine Einstellungen mehr speichern und faende dafuer
 # keine Erklaerung. Das chown danach faengt auch den Fall ab, dass die
 # Sicherung selbst schon falsche Eigentuemer trug.
-cp -p -v -r /tmp/${PDIR}.SAVE/* $PCONFIG/ 2>/dev/null
-chown -R loxberry:loxberry "$PCONFIG" 2>/dev/null
-rm -rf /tmp/${PDIR}.SAVE
+#
+# Die Sicherung liegt seit dem 10.08.2026 unter data/ statt unter /tmp: /tmp
+# ist auf dem LoxBerry eine Ramdisk und ausserdem fuer jeden lesbar.
+SICHER="$LBPDATA/$PDIR/upgrade_sicherung"
+if [ -d "$SICHER" ]; then
+    cp -p -r "$SICHER/." "$PCONFIG/" 2>/dev/null
+    chown -R loxberry:loxberry "$PCONFIG" 2>/dev/null
+    rm -rf "$SICHER"
+    echo "<OK> Konfiguration zurueckgestellt."
+else
+    echo "<INFO> Keine Sicherung vorhanden - offenbar eine Erstinstallation."
+fi
 
 # --- APC-UPS NG --------------------------------------------------------------
 chmod 755 "$LBPBIN/$PDIR"/*.py 2>/dev/null
