@@ -1,94 +1,56 @@
-<h2>APC-UPS NG</h2>
+<h2><TMPL_VAR HILFE.K01></h2>
 
-<p>Das Plugin liest eine APC-USV &uuml;ber <code>apcupsd</code> aus und meldet
-Zustand, Akkuladung, Restlaufzeit und Last per MQTT an den Loxone Miniserver.
-Bei Stromausfall und Netzr&uuml;ckkehr gibt es zus&auml;tzlich eine
-Benachrichtigung.</p>
+<p><TMPL_VAR HILFE.K02></p>
 
-<h3>Voraussetzung: apcupsd muss laufen</h3>
-<p>Das Plugin misst nichts selbst &mdash; es fragt <code>apcupsd</code> ab, den
-Dienst, der mit der USV spricht. Der wird bei der Installation mitgebracht und
-gestartet. Zwei Stolpersteine gibt es dabei:</p>
+<h3><TMPL_VAR HILFE.K03></h3>
+<p><TMPL_VAR HILFE.K04></p>
 <ul>
-<li>In <code>/etc/default/apcupsd</code> steht nach der Paketinstallation
-<code>ISCONFIGURED=no</code>. Solange das so ist, startet apcupsd nicht. Die
-Installation dieses Plugins setzt den Wert auf <code>yes</code> &mdash; das ist
-die einzige Systemdatei, die angefasst wird.</li>
-<li>Die USV muss per USB angeschlossen und erkannt sein. Im Reiter
-<i>Test</i> zeigt <i>apcupsd pr&uuml;fen</i> die angeschlossenen USB-Ger&auml;te.</li>
+<li><TMPL_VAR HILFE.K05></li>
+<li><TMPL_VAR HILFE.K06></li>
 </ul>
 
-<h3>Einrichtung in drei Schritten</h3>
+<h3><TMPL_VAR HILFE.K07></h3>
 <ol>
-<li><b>Reiter Test &rarr; Jetzt abfragen.</b> Kommen dort Werte, ist der
-schwierige Teil erledigt.</li>
-<li><b>Reiter Einbindung in Loxone &rarr; Vorlage herunterladen</b> und in Loxone
-Config &uuml;ber <i>Vorlage einf&uuml;gen</i> einlesen.</li>
-<li><b>Eing&auml;nge mit dem MQTT-Gateway verbinden.</b> Die Vorlage legt nur die
-Namen an; die Werte liefert das Gateway.</li>
+<li><TMPL_VAR HILFE.K08></li>
+<li><TMPL_VAR HILFE.K09></li>
+<li><TMPL_VAR HILFE.K10></li>
 </ol>
 
-<h3>Was ver&ouml;ffentlicht wird</h3>
+<h3><TMPL_VAR HILFE.K11></h3>
 <table border="1" cellpadding="5" cellspacing="0">
-<tr><th>Thema</th><th>Bedeutung</th></tr>
-<tr><td><code>status</code></td><td>Zustandstext, z.&nbsp;B. ONLINE oder ONBATT</td></tr>
-<tr><td><code>on_battery</code></td><td>1 = Netzausfall, die USV speist aus dem Akku</td></tr>
-<tr><td><code>battery_charge</code></td><td>Akkuladung in Prozent</td></tr>
-<tr><td><code>time_left</code></td><td>verbleibende Laufzeit in Minuten</td></tr>
-<tr><td><code>load_watt</code></td><td>gesch&auml;tzte Last in Watt</td></tr>
-<tr><td><code>replace_battery</code></td><td>1 = die USV h&auml;lt einen Akkutausch f&uuml;r f&auml;llig</td></tr>
-<tr><td><code>event</code></td><td>Kurztext beim Zustandswechsel</td></tr>
+<tr><th><TMPL_VAR HILFE.K30></th><th><TMPL_VAR HILFE.K31></th></tr>
+<tr><td><TMPL_VAR HILFE.K32></td><td><TMPL_VAR HILFE.K33></td></tr>
+<tr><td><TMPL_VAR HILFE.K34></td><td><TMPL_VAR HILFE.K35></td></tr>
+<tr><td><TMPL_VAR HILFE.K36></td><td><TMPL_VAR HILFE.K37></td></tr>
+<tr><td><TMPL_VAR HILFE.K38></td><td><TMPL_VAR HILFE.K39></td></tr>
+<tr><td><TMPL_VAR HILFE.K40></td><td><TMPL_VAR HILFE.K41></td></tr>
+<tr><td><TMPL_VAR HILFE.K42></td><td><TMPL_VAR HILFE.K43></td></tr>
+<tr><td><TMPL_VAR HILFE.K44></td><td><TMPL_VAR HILFE.K45></td></tr>
 </table>
-<p>Die vollst&auml;ndige Liste steht im Reiter <i>Einbindung in Loxone</i>. Alle
-Themen sind <b>retained</b>: der Broker merkt sich den letzten Wert, nach einem
-Neustart des Miniservers ist der Zustand sofort wieder da.</p>
+<p><TMPL_VAR HILFE.K12></p>
 
-<h3>Was sich zum Schalten anbietet</h3>
-<p><code>on_battery</code> ist der Wert, auf den es meistens ankommt. Damit lassen
-sich unkritische Verbraucher abwerfen, eine Meldung ausgeben oder laufende
-Vorg&auml;nge anhalten. <code>time_left</code> sagt, wie lange noch Zeit bleibt.</p>
+<h3><TMPL_VAR HILFE.K13></h3>
+<p><TMPL_VAR HILFE.K14></p>
 
-<h3>Der alte XML-Weg</h3>
-<p>Die Originalfassung stellte eine XML-Seite bereit, die Loxone selbst abholt.
-Diese Seite gibt es weiterhin und liefert dieselbe Struktur &mdash; wer sie
-eingebunden hat, muss nichts &auml;ndern. F&uuml;r neue Anlagen ist MQTT der
-bessere Weg: der Miniserver muss nichts abfragen, die Werte &uuml;berleben einen
-Neustart, und es kommen deutlich mehr Gr&ouml;&szlig;en heraus.</p>
+<h3><TMPL_VAR HILFE.K15></h3>
+<p><TMPL_VAR HILFE.K16></p>
 
-<h3>Benachrichtigungen</h3>
-<p>Beim Wechsel zwischen Netz- und Akkubetrieb legt das Plugin eine Meldung im
-LoxBerry-Benachrichtigungsbereich ab (Glockensymbol oben). Ob das funktioniert,
-zeigt im Reiter <i>Test</i> der Knopf <i>Testmeldung ablegen</i>.</p>
-<p>Zus&auml;tzlich kann eine E-Mail verschickt werden. Das setzt voraus, dass auf
-dem LoxBerry ein Mailversand eingerichtet ist &mdash; sonst passiert
-stillschweigend nichts, und der Grund steht im Protokoll.</p>
+<h3><TMPL_VAR HILFE.K17></h3>
+<p><TMPL_VAR HILFE.K18></p>
+<p><TMPL_VAR HILFE.K19></p>
 
-<h3>Notabschaltung bei leerem Akku</h3>
-<p>Das entscheidet <b>apcupsd</b>, nicht dieses Plugin. Die Schwellen stehen in
-<code>/etc/apcupsd/apcupsd.conf</code> unter <code>BATTERYLEVEL</code>,
-<code>MINUTES</code> und <code>TIMEOUT</code>. Voreingestellt f&auml;hrt apcupsd
-herunter, wenn der Akku unter 5&nbsp;% f&auml;llt oder weniger als 3&nbsp;Minuten
-bleiben.</p>
+<h3><TMPL_VAR HILFE.K20></h3>
+<p><TMPL_VAR HILFE.K21></p>
 
-<h3>USV an einem anderen Rechner</h3>
-<p>H&auml;ngt die USV nicht am LoxBerry selbst, sondern an einem anderen Rechner
-mit apcupsd, l&auml;sst sich dessen Adresse im Reiter <i>Einstellungen</i> unter
-<i>USV-Host</i> eintragen. Dort muss apcupsd den Netzzugriff erlauben
-(<code>NETSERVER on</code>).</p>
+<h3><TMPL_VAR HILFE.K22></h3>
+<p><TMPL_VAR HILFE.K23></p>
 
-<h3>Wenn nichts kommt</h3>
+<h3><TMPL_VAR HILFE.K24></h3>
 <ul>
-<li><b>Reiter Test &rarr; apcupsd pr&uuml;fen:</b> l&auml;uft der Dienst, steht
-<code>ISCONFIGURED</code> auf <code>yes</code>, taucht die USV bei
-<code>lsusb</code> auf?</li>
-<li><b>Reiter Test &rarr; Jetzt abfragen:</b> zeigt die Fehlermeldung von
-<code>apcaccess</code> im Klartext.</li>
-<li><b>Reiter Logdateien:</b> dort steht die Ursache.</li>
+<li><TMPL_VAR HILFE.K25></li>
+<li><TMPL_VAR HILFE.K26></li>
+<li><TMPL_VAR HILFE.K27></li>
 </ul>
 
-<h3>Herkunft</h3>
-<p>Grundlage ist das Plugin von Christian Woerstenfeld, Apache-Lizenz 2.0. Die
-Autorenangabe in <code>plugin.cfg</code> bleibt unver&auml;ndert &mdash; LoxBerry
-identifiziert ein Plugin dar&uuml;ber. Was gegen&uuml;ber der Originalfassung
-ge&auml;ndert wurde, steht in der Datei <code>README.md</code> im
-Plugin-Ordner.</p>
+<h3><TMPL_VAR HILFE.K28></h3>
+<p><TMPL_VAR HILFE.K29></p>
