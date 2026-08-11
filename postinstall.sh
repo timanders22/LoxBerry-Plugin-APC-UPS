@@ -61,4 +61,40 @@ fi
 
 echo "<INFO> Naechster Schritt: Reiter Test -> Jetzt abfragen."
 
+
+# ==== NETZ-EINSTELLUNGEN-UPDATE (automatisch eingefuegt, nicht doppeln) ====
+# Zurueckspielen aus der Zweitschrift - aber NUR, wenn die Datei des Nutzers
+# wirklich verloren ist. Erkannt wird das an dreierlei: sie fehlt, sie ist
+# leer, oder sie ist zeichengenau die mitgelieferte Vorgabe (Pruefsumme
+# unten). Der letzte Fall ist der eigentliche: genau so sieht die Datei nach
+# dem Kopierschritt des Installers aus.
+#
+# Eine gueltige Konfiguration wird NIE ueberschrieben. Eine Sicherung, die
+# echte Einstellungen ersetzt, waere schlimmer als gar keine.
+NETZ_BASE="${5:-$LBHOMEDIR}"
+NETZ_PDIR="${3:-apc_ups_ng}"
+NETZ_CFG="$NETZ_BASE/config/plugins/$NETZ_PDIR"
+netz_zurueck() {
+    datei=$1; soll=$2
+    ziel="$NETZ_CFG/$datei"
+    zweit="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.$datei"
+    [ -f "$zweit" ] || return 0
+    verloren=0
+    if [ ! -f "$ziel" ] || [ ! -s "$ziel" ]; then
+        verloren=1
+    else
+        ist=$(sha256sum "$ziel" 2>/dev/null | cut -d" " -f1)
+        [ -n "$ist" ] && [ "$ist" = "$soll" ] && verloren=1
+    fi
+    if [ "$verloren" = "1" ]; then
+        if cp -p "$zweit" "$ziel" 2>/dev/null; then
+            echo "<OK> $datei aus der Zweitschrift wiederhergestellt."
+        else
+            echo "<WARNING> $datei liess sich nicht zurueckspielen. Die Sicherung"
+            echo "<WARNING> liegt unter $zweit und kann von Hand kopiert werden."
+        fi
+    fi
+}
+netz_zurueck "apc_ups_ng.cfg" "251d25e6ab72539887ba51f66aa4552d0a615cacf356956f1a4baefcb58343be"
+
 exit 0
