@@ -306,6 +306,7 @@ if ($ap_w['last_transfer'] !== '') { echo ' &middot; ' . ap_t('TEXT.ZULETZT') . 
 <div class="sm-step"><b><?php echo ap_t('TEXT.1_USV_PRFEN'); ?></b> <?php echo ap_t('TEXT.IM_REITER_TEST_MIT'); ?> <i><?php echo ap_t('TEXT.JETZT_ABFRAGEN'); ?></i><?php echo ap_t('TEXT.KOMMEN_DORT_WERTE_IST_DER_SCHWIERI'); ?></div>
 <div class="sm-step"><b><?php echo ap_t('TEXT.2_VORLAGE_HERUNTERLADEN'); ?></b> <?php echo ap_t('TEXT.UNTEN_UND_IN_LOXONE_CONFIG_EINLESE'); ?> <i><?php echo ap_t('TEXT.VORLAGE_EINFGEN'); ?></i>.</div>
 <div class="sm-step"><b><?php echo ap_t('TEXT.3_EINGNGE_MIT_DEM_MQTT_GATEWAY_VER'); ?></b> <?php echo ap_t('TEXT.DIE_VORLAGE_LEGT_NUR_DIE_NAMEN_AN_'); ?> <i><?php echo ap_t('TEXT.INCOMING_OVERVIEW'); ?></i> <?php echo ap_t('TEXT.ERSCHEINEN_DIE_THEMEN_SOBALD_DER_D'); ?></div>
+<?php if (!function_exists('ap_hs_autostart')) { function ap_hs_autostart() { $h = getenv('LBHOMEDIR') ?: '/opt/loxberry'; $g = $h . '/config/system/general.json'; if (!is_file($g)) { return null; } $j = json_decode((string) @file_get_contents($g), true); if (!is_array($j) || !isset($j['Mqtt'])) { return null; } return !empty($j['Mqtt']['Gatewayautostart']); } } if (ap_hs_autostart() === false) { ?><div class="sm-alert sm-warn"><b>MQTT:</b> <?php echo ap_t('TEXT.W_AUTOSTART'); ?></div><?php } ?>
 
 <div class="sm-small" style="margin-top:10px;">
 <?php echo ap_t('TEXT.BROKER'); ?> <span class="sm-mono"><?= $ap_broker !== '' ? ap_e($ap_broker) : 'MQTT-Gateway nicht gefunden' ?></span>
