@@ -1,12 +1,22 @@
-# Von Python beim Ausfuehren erzeugt. Gehoert nicht ins Repository: die
-# .pyc-Dateien sind an die Python-Fassung des jeweiligen Rechners gebunden
-# und werden beim naechsten Lauf ohnehin neu erzeugt.
+# Uebersetzte Python-Zwischenstaende gehoeren nicht ins Paket.
+#
+# In bin/ lagen bis 1.1.0 drei .pyc-Dateien aus einem Python-3.10-Lauf. Auf
+# dem Zielsystem passen sie zur dort vorhandenen Python-Fassung nicht
+# zwangslaeufig, und gebraucht werden sie ohnehin nicht - Python legt sie
+# bei Bedarf selbst an.
 __pycache__/
 *.pyc
+*.pyo
 
-# Betriebssystem-Beiwerk
+# Laufzeitdaten
+*.pid
+*.tmp
+
+# Betriebssystem- und Editorreste
 .DS_Store
 Thumbs.db
+*~
+*.swp
 
-# Protokolle
+# Protokolle (stand seit jeher im Repository, hier nachgetragen)
 *.log
