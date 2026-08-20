@@ -59,6 +59,19 @@ Aenderungen gegenueber dem Original (Apache License 2.0, Abschnitt 4 b)
        von Python und PHP GEMEINSAM gelesen; bis 1.1.6 gab es zwei
        Listen, und sie waren auseinandergelaufen.
 
+1.2.1  Keine Aenderung am Verhalten. Behoben ist eine Dauerfehlmeldung im
+       Pruefwerkzeug: das veroeffentlichte Archiv unterschied sich vom
+       Arbeitsordner in fuenf Dateien - nicht im Inhalt, sondern nur in den
+       Zeilenenden. Ursache war eine .gitattributes mit "* text=auto", die
+       aus dem Fork des Originalrepositories stammte und nur dort lag, nicht
+       im Arbeitsordner. GitHub normalisierte damit beim Erzeugen des
+       Archivs auf LF. Seit v1.0.0 so; fuer bestehende Anlagen aendert sich
+       mit 1.2.1 kein Byte.
+
+       Jetzt liegt eine eigene .gitattributes mit "* -text" bei, und die
+       fuenf Dateien stehen auf LF - auf dem Stand also, den sie beim
+       Anwender ohnehin hatten.
+
 Die urheberrechtliche Nennung des Originalautors steht weiterhin in dieser
 Datei, im README, in der Hilfeseite und im Kopf von bin/apc_common.py und
 bin/apc_service.py.

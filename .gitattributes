@@ -1,17 +1,45 @@
-# Auto detect text files and perform LF normalization
-* text=auto
-
-# Custom for Visual Studio
-*.cs     diff=csharp
-
-# Standard to msysgit
-*.doc	 diff=astextplain
-*.DOC	 diff=astextplain
-*.docx diff=astextplain
-*.DOCX diff=astextplain
-*.dot  diff=astextplain
-*.DOT  diff=astextplain
-*.pdf  diff=astextplain
-*.PDF	 diff=astextplain
-*.rtf	 diff=astextplain
-*.RTF	 diff=astextplain
+# Was eingecheckt ist, wird auch ausgeliefert. Keine Umschreibung.
+#
+# WARUM DIESE DATEI HIER STEHT
+#
+# Bis 1.2.0 lag im Repository eine .gitattributes mit
+#
+#     * text=auto
+#
+# - die Vorgabe, die Visual Studio beim Anlegen eines Repositories
+# hinterlaesst. Sie ist mit dem Fork des Originalrepositories mitgewandert
+# und lag NUR dort: im Arbeitsordner gab es sie nicht, also hat sie nie
+# jemand gesehen.
+#
+# Gewirkt hat sie trotzdem. GitHub wendet sie an, wenn es das Archiv zu
+# einem Tag erzeugt: jede als Text erkannte Datei kommt mit LF heraus,
+# unabhaengig davon, was eingecheckt wurde. Am 20.08.2026 gemessen, das
+# veroeffentlichte Archiv gegen den Ordner:
+#
+#     Dateien mit abweichendem INHALT           0
+#     Dateien mit abweichenden Zeilenenden      5
+#
+# und die fuenf waren deckungsgleich mit den fuenf CRLF-Dateien des Ordners
+# (plugin.cfg, release.cfg, prerelease.cfg, language_de.ini,
+# language_en.ini). Ueber vier Releases belegt - v1.0.0, v1.1.0, v1.1.6,
+# v1.2.0 -, also seit jeher so und kein Rueckschritt.
+#
+# Geschadet hat es nichts: LoxBerry liest diese Dateien zeilenweise, und LF
+# ist genau das, was jedes Linux-Werkzeug erwartet. Gekostet hat es etwas
+# anderes - eine Dauerfehlmeldung. "Werkzeuge/fassungslage.py" vergleicht das
+# veroeffentlichte Archiv byteweise mit dem Ordner und meldete deshalb bei
+# JEDEM Release "DIESELBE NUMMER, VERSCHIEDENER INHALT", ohne dass etwas
+# falsch war. Ein rotes Kreuz, das nichts bedeutet, ist schlimmer als keine
+# Pruefung: man sucht dann dort, und beim dritten Mal sieht man gar nicht
+# mehr hin.
+#
+# "-text" heisst: git rechnet an keiner Datei herum, weder beim Einchecken
+# noch beim Auschecken noch beim Erzeugen des Archivs. Damit gilt wieder,
+# was gelten soll - der Anwender bekommt die Bytes, die gepackt wurden. Die
+# drei Schwesterlinien dieser Werkstatt (Einspeisebremse, Bewaesserung,
+# Intercom) haben gar keine .gitattributes und verhalten sich genauso.
+#
+# Die fuenf Dateien sind mit 1.2.1 auf LF gestellt - auf den Stand also, den
+# sie beim Anwender seit v1.0.0 ohnehin haben. Fuer bestehende Anlagen
+# aendert sich dadurch kein einziges Byte.
+*	-text

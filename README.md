@@ -31,6 +31,74 @@ LoxBerry-Wikis (Punkt „Schritt 1") gilt es als verwaist. Diese Fassung wird
 hier gepflegt; Fehlermeldungen und Wünsche bitte als Issue in **diesem**
 Repository, nicht beim ursprünglichen Autor.
 
+## Version 1.2.1 — was gepackt wird, kommt auch an
+
+**Diese Fassung ändert am Verhalten des Plugins nichts.** Für eine bestehende
+Anlage ist sie byte-gleich mit 1.2.0 — gemessen gegen das *veröffentlichte*
+Archiv von v1.2.0: von 35 Dateien unterscheiden sich vier, und das sind die
+drei `.cfg` mit der neuen Nummer und die `.gitattributes` selbst. Wer 1.2.0
+laufen hat, verpasst nichts.
+
+Behoben ist etwas anderes: **eine Dauerfehlmeldung im eigenen Prüfwerkzeug.**
+
+`Werkzeuge/fassungslage.py` vergleicht das veröffentlichte Archiv byteweise
+mit dem Arbeitsordner. Für v1.2.0 meldete es *„DIESELBE NUMMER, VERSCHIEDENER
+INHALT. Nummer erhoehen."* — die Meldung, für die es dieses Werkzeug gibt.
+Nachgemessen war sie kein Befund:
+
+| | |
+|---|---|
+| Dateien mit abweichendem **Inhalt** | **0** |
+| Dateien mit abweichenden **Zeilenenden** | **5** |
+| nur im Archiv | `.gitattributes` |
+
+Die fünf waren deckungsgleich mit den fünf CRLF-Dateien des Ordners
+(`plugin.cfg`, `release.cfg`, `prerelease.cfg`, `language_de.ini`,
+`language_en.ini`).
+
+**Die Ursache lag im Repository, nicht im Bauablauf.** Dort lag eine
+`.gitattributes` mit `* text=auto` — die Vorgabe, die Visual Studio beim
+Anlegen eines Repositories hinterlässt. Sie ist mit dem Fork des
+Originalrepositories mitgewandert und lag **nur** dort: im Arbeitsordner gab
+es sie nicht, also hat sie nie jemand gesehen. GitHub wendet sie an, wenn es
+das Archiv zu einem Tag erzeugt; jede als Text erkannte Datei kommt mit LF
+heraus, unabhängig davon, was eingecheckt wurde.
+
+Belegt über vier Releases — v1.0.0, v1.1.0, v1.1.6, v1.2.0: in allen vieren
+liegt die Datei, in allen vieren sind die fünf LF. **Seit jeher so, kein
+Rückschritt.** Und nicht hauseigen: die Schwesterlinien Einspeisebremse,
+Bewässerung und Intercom haben keine `.gitattributes` und liefern aus, was
+gepackt wurde.
+
+Geschadet hat es nichts — LoxBerry liest diese Dateien zeilenweise, und LF ist
+das, was jedes Linux-Werkzeug erwartet. Gekostet hat es die Verlässlichkeit
+einer Prüfung: *ein rotes Kreuz, das nichts bedeutet, ist schlimmer als keine
+Prüfung.* Beim dritten Mal sieht man nicht mehr hin — und übersieht dann den
+Fall, in dem wirklich der Inhalt abweicht.
+
+### Was 1.2.1 tut
+
+- **`.gitattributes` mit `* -text`** liegt jetzt im Plugin-Ordner und ersetzt
+  damit die geerbte. `-text` heißt: git rechnet an keiner Datei herum, weder
+  beim Einchecken noch beim Auschecken noch beim Erzeugen des Archivs.
+- **Die fünf Dateien stehen auf LF** — also auf dem Stand, den sie beim
+  Anwender seit v1.0.0 ohnehin haben. Deshalb ändert sich für bestehende
+  Anlagen kein Byte.
+- **Der Sprachdatei-Erzeuger schreibt LF** statt CRLF, und seine Wache ist
+  mitgedreht: sie schlägt jetzt bei CRLF an. Ohne das hätte der nächste Lauf
+  die Abweichung stillschweigend wiederhergestellt. Geeicht in beide
+  Richtungen — richtig grün, zurückgebaut rot.
+
+### Der Bezugspunkt für Zeilenenden ist das veröffentlichte Archiv
+
+Die Lehre, die über diese Fassung hinausreicht: `zeilenenden_vergleichen.py`
+gegen das lokal gepackte ZIP beantwortet die Frage *„habe ich beim Ändern
+etwas verschoben?"* — nicht die Frage *„kommt beim Anwender an, was ich
+meine"*. Zwischen dem eigenen ZIP und dem Archiv, das über das Auto-Update
+ausgeliefert wird, liegt das Repository. Für die zweite Frage gibt es genau
+einen Weg: das veröffentlichte Archiv herunterladen und byteweise
+vergleichen.
+
 ## Version 1.2.0 — Befunde, Alarmstufe, fünfter Reiter
 
 Diese Fassung entstand aus einer Zeile-für-Zeile-Durchsicht von 1.1.6 gegen die
