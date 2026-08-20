@@ -95,6 +95,6 @@ netz_zurueck() {
         fi
     fi
 }
-netz_zurueck "apc_ups_ng.cfg" "251d25e6ab72539887ba51f66aa4552d0a615cacf356956f1a4baefcb58343be"
+netz_zurueck "apc_ups_ng.cfg" "db6b2b24b51a7b599d77f56ea00e03a765b25fad706bb220f2f21a3a20efeda2"
 
 exit 0

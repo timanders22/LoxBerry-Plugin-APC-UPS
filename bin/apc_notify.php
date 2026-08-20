@@ -20,6 +20,41 @@
 
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
 
+/* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
+ *
+ * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
+ * config/plugins UND webfrontend enthaelt. Das trifft die uebliche
+ * Installation genauso wie eine an einem anderen Ort - und es trifft auch
+ * den Fall, dass das Plugin noch als entpacktes Archiv daliegt (dann findet
+ * es nichts und gibt einen Leerstring zurueck, was der Aufrufer ohnehin
+ * abfangen muss).
+ *
+ * DIESER BLOCK STAND BIS 1.1.6 AM DATEIENDE - also HINTER seinem eigenen
+ * Aufruf. PHP zieht Funktionen, die in einem if-Block stehen, nicht vor:
+ * sie entstehen erst, wenn die Zeile ausgefuehrt wird. Der Aufruf weiter
+ * unten endete deshalb mit "Call to undefined function" und Rueckgabewert
+ * 255, sobald LBHOMEDIR leer war - und genau davon geht der Dienst aus, der
+ * dieses Skript ueber "su loxberry -c" startet.
+ *
+ * Der Name traegt kein Plugin-Kuerzel und ist deshalb abgesichert: zwei
+ * Bibliotheken landen nie im selben Prozess, aber die Pruefung kostet nichts.
+ */
+if (!function_exists('lb_wurzel_ermitteln')) {
+    function lb_wurzel_ermitteln()
+    {
+        $d = __DIR__;
+        for ($i = 0; $i < 8; $i++) {
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+                return $d;
+            }
+            $eltern = dirname($d);
+            if ($eltern === $d) { break; }
+            $d = $eltern;
+        }
+        return '';
+    }
+}
+
 $home = getenv('LBHOMEDIR');
 if (!$home) {
     $home = lb_wurzel_ermitteln();
@@ -32,7 +67,7 @@ if (!$home || !file_exists($sdk)) {
 require_once $home . '/libs/phplib/loxberry_system.php';
 require_once $sdk;
 
-$schwere = isset($argv[1]) && ctype_digit((string) $argv[1]) ? (int) $argv[1] : 4;
+$schwere = isset($argv[1]) && preg_match('/^[0-9]+$/', (string) $argv[1]) ? (int) $argv[1] : 4;
 $text    = isset($argv[2]) ? (string) $argv[2] : '';
 if (trim($text) === '') {
     fwrite(STDERR, "Kein Text angegeben.\n");
@@ -63,31 +98,3 @@ notify_ext(array(
 
 exit(0);
 
-
-/* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
- *
- * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
- * config/plugins UND webfrontend enthaelt. Das trifft die uebliche
- * Installation genauso wie eine an einem anderen Ort - und es trifft auch
- * den Fall, dass das Plugin noch als entpacktes Archiv daliegt (dann findet
- * es nichts und gibt einen Leerstring zurueck, was der Aufrufer ohnehin
- * abfangen muss).
- *
- * Der Name traegt kein Plugin-Kuerzel und ist deshalb abgesichert: zwei
- * Bibliotheken landen nie im selben Prozess, aber die Pruefung kostet nichts.
- */
-if (!function_exists('lb_wurzel_ermitteln')) {
-    function lb_wurzel_ermitteln()
-    {
-        $d = __DIR__;
-        for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
-                return $d;
-            }
-            $eltern = dirname($d);
-            if ($eltern === $d) { break; }
-            $d = $eltern;
-        }
-        return '';
-    }
-}

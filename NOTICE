@@ -35,8 +35,33 @@ Aenderungen gegenueber dem Original (Apache License 2.0, Abschnitt 4 b)
        Fortfuehrung bei paralleler Installation gegenseitig ueberschrieben.
        Sie heissen jetzt apc_ups_ng_status.json und apc_ups_ng.pid.
 
+1.2.0  Zwei Fehler behoben, die den Betrieb verhindern konnten, und der
+       Funktionsumfang erweitert.
+
+       bin/apc_common.py rief time.tzset() auf, ohne time zu importieren.
+       Der Aufruf stand in einem except-Zweig fuer AttributeError; ein
+       NameError laeuft dort nicht hinein. Auf jedem System mit
+       /etc/timezone und ohne gesetztes TZ scheiterte damit schon der
+       Import des Moduls - und mit ihm der Dienst, die Einmalabfrage und
+       der Knopf "Jetzt abfragen".
+
+       bin/apc_notify.php rief lb_wurzel_ermitteln() auf, bevor die
+       Funktion definiert war. PHP zieht Funktionen aus einem if-Block
+       nicht vor; bei leerem LBHOMEDIR endete das Skript mit
+       "Call to undefined function" und Rueckgabewert 255.
+
+       Neu: gestufte Alarmstufe aus den Abschaltschwellen von apcupsd,
+       zehn weitere Messgroessen, ein Durchreicher fuer beliebige
+       apcaccess-Rohfelder, eine Ereignishistorie, ein Selbsttest am
+       XML-Endpunkt, ein Waechter unter cron/, ein fuenfter Reiter MQTT
+       mit dem einzutragenden Abo und eine Baustein-Liste fuer Loxone.
+       Die Themenliste steht seit 1.2.0 in bin/apc_themen.json und wird
+       von Python und PHP GEMEINSAM gelesen; bis 1.1.6 gab es zwei
+       Listen, und sie waren auseinandergelaufen.
+
 Die urheberrechtliche Nennung des Originalautors steht weiterhin in dieser
-Datei, im README, in der Hilfeseite und im Kopf beider Python-Dateien.
+Datei, im README, in der Hilfeseite und im Kopf von bin/apc_common.py und
+bin/apc_service.py.
 
 
 Marken

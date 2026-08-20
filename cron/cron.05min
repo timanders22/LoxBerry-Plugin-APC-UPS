@@ -1,0 +1,75 @@
+#!/bin/sh
+#
+# APC-UPS NG - Waechter, alle fuenf Minuten.
+#
+# Bis 1.1.6 gab es keinen. Stirbt der Dienst - etwa an einem unerwarteten
+# Fehler oder weil ihn jemand versehentlich beendet hat -, lief er bis zum
+# naechsten Neustart des Rechners nicht wieder an. Bei einem USV-Plugin
+# heisst das: der naechste Stromausfall wird nicht gemeldet, und in Loxone
+# sieht alles normal aus, weil virtuelle Eingaenge ihren letzten Wert
+# behalten.
+#
+# Fuenf Minuten statt einer: der Dienst ist ein Dauerlaeufer, kein Cron-Job.
+# Ein minuetlicher Anlauf brauchte nur Rechenzeit.
+#
+# Der Platzhalter in der Zeile DIENST= wird bei der Installation durch den
+# bin-Ordner des Plugins ersetzt. Er steht deshalb NUR dort und nicht hier
+# im Kommentar: der Installer ersetzt ihn ueberall, und danach stuende in
+# dieser Datei ein fest verdrahteter Systempfad - genau danach sucht der
+# Pluginpruefer, ohne den Zusammenhang zu lesen.
+#
+# NICHT vom eigenen Ablageort eine feste Zahl Ebenen aufwaerts rechnen:
+# LoxBerry legt diese Datei unter <Wurzel>/system/cron/cron.05min/<plugin>
+# ab, also drei Ebenen unter der Wurzel. Eine Rechnung mit ".." landet
+# daneben, und der Waechter lauft dann ins Leere, ohne es zu sagen.
+DIENST="REPLACELBPBINDIR/apc_service.py"
+
+# Ist das Plugin ausgeschaltet, hat der Waechter nichts zu tun. Sonst
+# startete er einen Dienst, den der Anwender bewusst angehalten hat - und
+# ein Waechter, der gegen den Willen des Anwenders arbeitet, ist schlimmer
+# als keiner.
+CFG="REPLACELBPCONFIGDIR/apc_ups_ng.cfg"
+if [ -f "$CFG" ] && grep -q '^enabled=0' "$CFG"; then
+    exit 0
+fi
+
+# Fail loud statt still. Ein Waechter, der schweigend nichts tut, ist
+# schlimmer als keiner.
+if [ ! -x "$DIENST" ]; then
+    MELDUNG="APC-UPS NG: der Waechter findet apc_service.py nicht - es wird nicht nachgestartet."
+    command -v logger >/dev/null 2>&1 && logger -t apc_ups_ng "$MELDUNG"
+    echo "$MELDUNG" >&2
+    exit 1
+fi
+
+# Laeuft er schon? Punktgenau ueber die PID-Datei nachsehen, nicht ueber
+# "pgrep -f apc_service.py": das traefe auch einen offenen Editor oder ein
+# Sicherungsskript, das gerade den Ordner durchsucht.
+PIDF=/run/shm/apc_ups_ng.pid
+[ -f "$PIDF" ] || PIDF="REPLACELBPLOGDIR/apc_ups_ng.pid"
+if [ -f "$PIDF" ]; then
+    P=$(cat "$PIDF" 2>/dev/null)
+    if [ -n "$P" ] && kill -0 "$P" 2>/dev/null \
+       && grep -qa "apc_service.py" "/proc/$P/cmdline" 2>/dev/null; then
+        exit 0
+    fi
+fi
+
+# Er laeuft nicht. Nachstarten - als loxberry, nicht als root: der Dienst
+# fragt nur den laufenden apcupsd ueber das Netz ab und braucht keine
+# Rootrechte.
+#
+# Im Normalfall schweigt dieses Skript. Nur der Nachstart selbst ist eine
+# Zeile wert - sonst schriebe ein Cron alle fuenf Minuten in den
+# Systemlogger, und niemand laese ihn mehr.
+MELDUNG="APC-UPS NG: der Dienst lief nicht mehr und wurde nachgestartet."
+LOG="REPLACELBPLOGDIR/apc_ups_ng.log"
+if su loxberry -c "nohup $DIENST >> $LOG 2>&1 &" >/dev/null 2>&1; then
+    command -v logger >/dev/null 2>&1 && logger -t apc_ups_ng "$MELDUNG"
+    exit 0
+fi
+
+MELDUNG="APC-UPS NG: der Dienst liess sich nicht nachstarten - siehe Reiter Logdateien."
+command -v logger >/dev/null 2>&1 && logger -t apc_ups_ng "$MELDUNG"
+echo "$MELDUNG" >&2
+exit 1
