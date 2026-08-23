@@ -2,6 +2,13 @@
 
 # To use important variables from command line use the following code:
 PDIR=$3       # Third argument is Plugin installation folder
+# Rueckfall, falls sudo die Umgebung ausgeraeumt hat (env_reset).
+# Das fuenfte Argument ist das Wurzelverzeichnis und traegt immer.
+LBPCONFIG="${LBPCONFIG:-$5/config/plugins}"
+LBPBIN="${LBPBIN:-$5/bin/plugins}"
+# sudo -n -u loxberry setzt die Umgebung zurueck - ohne diesen
+# Rueckfall zeigte $LBPDATA ins Nichts und der Pfad auf /<ordner>.
+LBPDATA="${LBPDATA:-$5/data/plugins}"
 #LBHOMEDIR=$5 # Comes from /etc/environment now.
 
 PCONFIG=$LBPCONFIG/$PDIR
@@ -16,7 +23,7 @@ echo "<INFO> Copy back existing config files"
 #
 # Die Sicherung liegt seit dem 10.08.2026 unter data/ statt unter /tmp: /tmp
 # ist auf dem LoxBerry eine Ramdisk und ausserdem fuer jeden lesbar.
-SICHER="$LBPDATA/$PDIR/upgrade_sicherung"
+SICHER="$LBPDATA/$PDIR.upgrade_sicherung"
 if [ -d "$SICHER" ]; then
     cp -p -r "$SICHER/." "$PCONFIG/" 2>/dev/null
     chown -R loxberry:loxberry "$PCONFIG" 2>/dev/null
