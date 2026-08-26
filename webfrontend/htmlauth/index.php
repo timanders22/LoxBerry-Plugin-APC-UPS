@@ -311,6 +311,54 @@ if ($ap_frame) {
     // Bedienung, und Rueckfragen dazu gehoeren nicht zum Originalautor.
     LBWeb::lbheader('APC-UPS NG', 'https://github.com/timanders22/LoxBerry-Plugin-APC-UPS', 'help.html');
 }
+
+/* ---------------- Einstellungen sichern ----------------
+ *
+ * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken. Ohne ihn
+ * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin
+ * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
+ * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
+if ($ap_ist_post && isset($_POST['ap_sichern'])) {
+    $ap_js = json_encode(apc_konfig(),
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($ap_js !== false) {
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="apc_einstellungen_'
+               . date('Ymd_His') . '.json"');
+        echo $ap_js;
+        exit;
+    }
+    $ap_fehler[] = ap_t('EINST.SICH_SCHREIBFEHLER');
+}
+
+/* ---------------- Einstellungen zurueckspielen ----------------
+ *
+ * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
+ * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
+ * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
+if ($ap_ist_post && isset($_POST['ap_zurueck'])) {
+    if (!isset($_FILES['ap_sicherung']) || !is_array($_FILES['ap_sicherung'])
+        || !isset($_FILES['ap_sicherung']['tmp_name'])
+        || !@is_uploaded_file($_FILES['ap_sicherung']['tmp_name'])) {
+        $ap_fehler[] = ap_t('EINST.SICH_KEINE_DATEI');
+    } elseif ((int) $_FILES['ap_sicherung']['size'] > 262144) {
+        $ap_fehler[] = ap_t('EINST.SICH_ZU_GROSS');
+    } else {
+        list($ap_neu, $ap_mangel, $ap_n) = ap_sicherung_lesen(
+            (string) @file_get_contents($_FILES['ap_sicherung']['tmp_name']));
+        if ($ap_neu === null) {
+            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
+             * nichts. */
+            $ap_fehler[] = ap_t('EINST.SICH_ABGELEHNT') . ' '
+                            . implode(' ', $ap_mangel);
+        } elseif (ap_config_write($ap_neu)) {
+            $ap_meldungen[] = sprintf(ap_t('EINST.SICH_UEBERNOMMEN'), $ap_n);
+        } else {
+            $ap_fehler[] = ap_t('EINST.SICH_SCHREIBFEHLER');
+        }
+    }
+}
+
 ?>
 <style>
 /* Hausstandard: eigener Behaelter, kein Schattenwurf, Reiter im Fluss.
@@ -596,6 +644,7 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
 
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-aktion"></i> <?php echo ap_e(ap_t('LEGENDE.AKTION')); ?></span>
+<span><i class="sm-punkt sm-b-lesen"></i> <?php echo ap_e(ap_t('LEGENDE.LESEN')); ?></span>
 </div>
 <div class="sm-knopfreihe">
 <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="save" value="1"><?php echo ap_e(ap_t('ALLGEMEIN.SPEICHERN')); ?></button>
@@ -605,6 +654,25 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
 
 <h2><?php echo ap_e(ap_t('EINST.NOTABSCHALTUNG')); ?></h2>
 <div class="sm-hilfe"><?php echo ap_t('EINST.NOTABSCHALTUNG_HILFE'); ?></div>
+
+<h2><?= ap_t('EINST.H_SICHERUNG') ?></h2>
+<div class="sm-hinweis"><?= ap_t('EINST.SICH_ERKLAERUNG') ?></div>
+<div class="sm-warnung"><?= ap_t('EINST.SICH_WARNUNG') ?></div>
+<div class="sm-knopfreihe">
+  <!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
+       exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
+       Wer beides in ein Formular legt, bekommt entweder keinen Upload oder
+       einen Download, der das Speichern verschluckt. -->
+  <form action="index.php" method="post">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="ap_sichern" value="1"><?= ap_t('EINST.K_SICHERN') ?></button>
+  </form>
+  <form action="index.php" method="post" enctype="multipart/form-data">
+    <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <input data-role="none" type="file" name="ap_sicherung" accept=".json">
+    <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ap_zurueck" value="1"><?= ap_t('EINST.K_ZURUECK') ?></button>
+  </form>
+</div>
 </div>
 
 <!-- ================= Reiter: MQTT ================= -->
@@ -634,7 +702,7 @@ $ap_kachel(ap_t('MQTT.PRAEFIX'), ap_e($ap_praefix));
 <p><b><?php echo ap_e(ap_t('MQTT.ABO_SATZ')); ?></b></p>
 <p class="sm-pre"><?php echo ap_e($ap_praefix); ?>/#</p>
 <p><?php echo ap_t('MQTT.ABO_WEG'); ?></p>
-<p><b><?php echo ap_e(ap_t('MQTT.ABO_OHNE')); ?></b></p>
+<p><b><?php echo ap_abo_text(); ?></b></p>
 </div>
 
 <h2><?php echo ap_e(ap_t('MQTT.EINSTELLUNGEN')); ?></h2>
@@ -698,7 +766,7 @@ $ap_kachel(ap_t('MQTT.PRAEFIX'), ap_e($ap_praefix));
 <div class="sm-step">
 <p><?php echo ap_t('LOXONE.SCHRITT2_TEXT'); ?></p>
 <p class="sm-pre"><?php echo ap_e($ap_praefix); ?>/#</p>
-<p><b><?php echo ap_e(ap_t('MQTT.ABO_OHNE')); ?></b></p>
+<p><b><?php echo ap_abo_text(); ?></b></p>
 </div>
 
 <h2><?php echo ap_e(ap_t('LOXONE.SCHRITT3')); ?></h2>
