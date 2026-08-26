@@ -139,6 +139,23 @@ if ($ap_ist_post) {
     }
 }
 
+/* ==================================================================
+ * DIE HANDLER STEHEN VOR lbheader() - DAS IST BAUVORSCHRIFT
+ * ==================================================================
+ *
+ * Stand der Kopf davor, war er beim Aufruf von header() schon
+ * geschrieben - "Cannot modify header information", und der Knopf
+ * "Einstellungen sichern" lieferte eine Seite mit angehaengtem JSON
+ * statt einer Datei.
+ *
+ * Am PHP-CLI ist das unsichtbar: header() ist dort wirkungslos und
+ * headers_sent() immer falsch. Und wer OHNE gueltiges Formularmerkmal
+ * misst, wird vom Wachposten abgewiesen, bevor der Handler anlaeuft.
+ * Beides hat den Fehler lange verdeckt.
+ *
+ * Reihenfolge: Bibliothek, Konfiguration, Wachposten, Reiterwahl,
+ * ALLE Handler samt Downloads, dann erst lbheader(), dann HTML.
+ * ================================================================== */
 /* ============ Loxone-Vorlage herunterladen ============ */
 if ($ap_ist_post && isset($_POST['download'])) {
     $art = (string) $_POST['download'];
@@ -305,12 +322,6 @@ function ap_zahl($w, $k, $einheit = '')
 }
 
 $ap_frame = class_exists('LBWeb', false);
-if ($ap_frame) {
-    // Der Verweis zeigt auf DIESES Repository, nicht auf die Wiki-Seite des
-    // Originalplugins: die beschreibt eine andere Fassung mit anderer
-    // Bedienung, und Rueckfragen dazu gehoeren nicht zum Originalautor.
-    LBWeb::lbheader('APC-UPS NG', 'https://github.com/timanders22/LoxBerry-Plugin-APC-UPS', 'help.html');
-}
 
 /* ---------------- Einstellungen sichern ----------------
  *
@@ -357,6 +368,14 @@ if ($ap_ist_post && isset($_POST['ap_zurueck'])) {
             $ap_fehler[] = ap_t('EINST.SICH_SCHREIBFEHLER');
         }
     }
+}
+
+
+if ($ap_frame) {
+    // Der Verweis zeigt auf DIESES Repository, nicht auf die Wiki-Seite des
+    // Originalplugins: die beschreibt eine andere Fassung mit anderer
+    // Bedienung, und Rueckfragen dazu gehoeren nicht zum Originalautor.
+    LBWeb::lbheader('APC-UPS NG', 'https://github.com/timanders22/LoxBerry-Plugin-APC-UPS', 'help.html');
 }
 
 ?>
