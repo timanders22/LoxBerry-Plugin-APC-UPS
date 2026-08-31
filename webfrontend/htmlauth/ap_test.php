@@ -542,7 +542,7 @@ function ap_test_ausfuehren($was)
             $themen = ap_themen();
             $t = ap_t('MQTT.BROKER') . ': ' . ($broker !== '' ? $broker : ap_t('MQTT.KEIN_BROKER')) . "\n";
             $t .= ap_t('MQTT.PRAEFIX') . ': ' . $praefix . "\n";
-            $t .= ap_t('MQTT.ABO_SATZ') . ': ' . $praefix . "/#\n\n";
+            $t .= ap_t('MQTT.ABO_SATZ') . ' ' . $praefix . "/#\n\n";
             if ($broker === '') {
                 // Der MQTT-Gateway ist seit LoxBerry 3 Bestandteil des
                 // Systems, kein Plugin. Bis 1.1.6 stand hier das Gegenteil.
