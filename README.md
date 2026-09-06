@@ -4,6 +4,49 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.6
+
+**Der Dienst konnte sein Protokoll verlieren, ohne dass es auffiel.**
+
+Am 06.09.2026 an einem laufenden LoxBerry gemessen — aufgefallen am
+Heimkino-Plugin, das sieben Stunden lief und keine Protokolldatei hatte:
+`log/plugins` liegt auf einer **Ramdisk** (`/dev/zram0`). Wird sie geleert,
+ist die Datei fort — und ein `logging.FileHandler`, der sie beim Start
+**einmal** geöffnet hat, schreibt bis zum nächsten Neustart in einen
+gelöschten Inode. Es gibt keine Fehlermeldung; es gibt gar nichts.
+
+Diese Fassung benutzt deshalb `logging.handlers.WatchedFileHandler`. Der
+prüft bei jeder Zeile Gerätenummer und Inode und öffnet nötigenfalls neu; er
+steht in der Standardbibliothek und ist für genau diesen Fall gebaut.
+
+Auf dem Gerät geeicht, in beide Richtungen: mit dem alten Handler ist die
+Zeile nach dem Löschen verloren, mit dem neuen steht sie in der wieder
+angelegten Datei. Auf einem Windows-Arbeitsplatz lässt sich das nicht
+messen — dort kann eine offene Datei gar nicht gelöscht werden.
+
+Dieselbe Bauart hatten APC-UPS NG, BLE-Scanner NG, Heimkino und Ultraschall
+Entfernung; alle vier sind am selben Tag nachgezogen worden. Über alle
+Plugin-Ordner gezählt (06.09.2026) benutzen jetzt genau diese vier den
+`WatchedFileHandler`.
+
+**Eine fünfte Stelle ist offen und soll hier benannt sein, statt zu fehlen:**
+Skoda Connect NG stand hier zunächst als Ausnahme mit der Begründung, ein Cron
+starte das Programm bei jedem Lauf neu. Nachgemessen trifft das nicht zu: der
+Cron ruft dort nur `waechter` und `wachzeichen`; der eigentliche Dienst läuft
+dauerhaft (`bin/dienst.sh`, `nohup … &`). In diesem Zweig steht ein
+`RotatingFileHandler` — der hält ebenfalls einen offenen Deskriptor und öffnet
+nur bei seiner **eigenen** Größenrotation neu, nicht wenn die Datei unter ihm
+verschwindet. Die Bauart ist dort also dieselbe, nur in anderem Gewand, und
+noch nicht behoben.
+
+**Weiter:** `ap_config_write()` rief `@mkdir()` auch dann, wenn das
+Verzeichnis schon da war. Das `@` unterdrückt nur die Ausgabe — ein
+gesetzter Fehlerbehandler sieht die Warnung trotzdem, und jeder
+Prüfstand setzt einen (`rendern.py`, 06.09.2026). Jetzt erst `is_dir()`,
+dann anlegen. Dazu ein umgeschriebenes Wort in der deutschen Oberfläche
+berichtigt.
+
+
 ## Herkunft und Pflege
 
 Grundlage ist das Plugin **APC-UPS** von **Christian Woerstenfeld**, Stand

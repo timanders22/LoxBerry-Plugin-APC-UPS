@@ -196,7 +196,14 @@ function ap_roh($cfg, $key)
 function ap_config_write($werte)
 {
     $file = ap_paths()['config'];
-    @mkdir(dirname($file), 0775, true);
+    // Erst fragen, dann anlegen. Ein @mkdir auf ein VORHANDENES Verzeichnis
+    // meldet "File exists"; das @ unterdrueckt nur die Ausgabe, ein
+    // gesetzter Fehlerbehandler sieht die Warnung trotzdem - und jeder
+    // Pruefstand setzt einen. Gemessen mit rendern.py am 06.09.2026.
+    $ordner = dirname($file);
+    if (!is_dir($ordner)) {
+        @mkdir($ordner, 0775, true);
+    }
     $txt = "; APC-UPS NG\n; Geschrieben von der Plugin-Oberflaeche.\n\n[apc_ups_ng]\n";
     foreach (ap_defaults() as $k => $vorgabe) {
         $v = array_key_exists($k, $werte) ? $werte[$k] : $vorgabe;

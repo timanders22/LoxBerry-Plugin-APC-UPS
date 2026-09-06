@@ -59,13 +59,56 @@ fi
 # fragt nur den laufenden apcupsd ueber das Netz ab und braucht keine
 # Rootrechte.
 #
-# Im Normalfall schweigt dieses Skript. Nur der Nachstart selbst ist eine
-# Zeile wert - sonst schriebe ein Cron alle fuenf Minuten in den
-# Systemlogger, und niemand laese ihn mehr.
+# ALS WELCHER BENUTZER LAEUFT DIESES SKRIPT? Das ist die Frage, an der der
+# Waechter bis 1.2.5 gescheitert ist - jedes Mal, seit es ihn gibt.
+#
+# Hier stand der Start unbedingt ueber einen Benutzerwechsel - und der
+# setzt Rootrechte voraus. Der LoxBerry-Cron ruft die Dateien unter
+# system/cron/cron.05min aber ALS loxberry auf; gemessen in
+# /etc/cron.d/lbdefaults:
+#     */5 * * * * loxberry cd / && for f in .../cron.05min/*; do ($f ... &); done
+# Ein Benutzerwechsel verlangt dann ein Kennwort und endet mit
+# "Authentication failure", Rueckgabewert 1.
+#
+# Der alte Aufruf steht hier bewusst NICHT im Wortlaut: ein Kommentar, der
+# die falsche Form woertlich fuehrt, laesst jede Suche danach auf sich
+# selbst anschlagen. Genau das ist beim Berichtigen passiert.
+#
+# Am 06.09.2026 am Geraet gemessen: der Waechter hat seit der Installation
+# um 19:52 alle fuenf Minuten in den Systemlogger geschrieben
+#     "APC-UPS NG: der Dienst liess sich nicht nachstarten"
+# und der Dienst lief anderthalb Stunden lang nicht. Er hat also laut
+# gemeldet, dass er scheitert - und trotzdem nie gestartet.
+#
+# Deshalb wird der Benutzer jetzt GEMESSEN, nicht angenommen.
 MELDUNG="APC-UPS NG: der Dienst lief nicht mehr und wurde nachgestartet."
 LOG="REPLACELBPLOGDIR/apc_ups_ng.log"
-if su loxberry -c "nohup $DIENST >> $LOG 2>&1 &" >/dev/null 2>&1; then
+WER=$(id -un 2>/dev/null)
+
+if [ "$WER" = "loxberry" ]; then
+    nohup "$DIENST" >> "$LOG" 2>&1 &
+elif [ "$(id -u 2>/dev/null)" = "0" ]; then
+    su loxberry -c "nohup $DIENST >> $LOG 2>&1 &" >/dev/null 2>&1
+else
+    MELDUNG="APC-UPS NG: der Waechter laeuft als '$WER' - weder loxberry noch root. Es wird nicht nachgestartet."
     command -v logger >/dev/null 2>&1 && logger -t apc_ups_ng "$MELDUNG"
+    echo "$MELDUNG" >&2
+    exit 1
+fi
+
+# Die WIRKUNG pruefen, nicht den Rueckgabewert.
+#
+# "nohup ... &" endet immer mit 0 - es sagt nur, dass die Shell den Auftrag
+# abgesetzt hat, nichts darueber, ob der Dienst hochkam. Die alte Fassung
+# hat genau daraus ihren Erfolg abgeleitet. Deshalb: kurz warten und
+# nachsehen, ob wirklich einer laeuft.
+sleep 3
+PIDF=/run/shm/apc_ups_ng.pid
+[ -f "$PIDF" ] || PIDF="REPLACELBPLOGDIR/apc_ups_ng.pid"
+NEU=$(cat "$PIDF" 2>/dev/null)
+if [ -n "$NEU" ] && kill -0 "$NEU" 2>/dev/null \
+   && grep -qa "apc_service.py" "/proc/$NEU/cmdline" 2>/dev/null; then
+    command -v logger >/dev/null 2>&1 && logger -t apc_ups_ng "$MELDUNG (PID $NEU)"
     exit 0
 fi
 

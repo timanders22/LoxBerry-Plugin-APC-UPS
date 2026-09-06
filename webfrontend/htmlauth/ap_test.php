@@ -185,23 +185,48 @@ function ap_test_selbstpruefung($cfg, $w, $pid, $alter, $broker, $autostart)
     if ($sysctl !== '' && !@is_executable($sysctl)) {
         $sysctl = '';
     }
+    $laeuft = null;
     if ($sysctl === '') {
         ap_pruefzeile(ap_t('TEST.F_APCUPSD'), $zaehle(null),
             ap_e(ap_t('TEST.A_KEIN_SYSTEMCTL')));
     } else {
         $dienstlauf = trim(ap_sh(escapeshellarg($sysctl) . ' is-active apcupsd 2>/dev/null'));
-        ap_pruefzeile(ap_t('TEST.F_APCUPSD'), $zaehle($dienstlauf === 'active'),
+        $laeuft = ($dienstlauf === 'active');
+        ap_pruefzeile(ap_t('TEST.F_APCUPSD'), $zaehle($laeuft),
             ap_e($dienstlauf !== '' ? $dienstlauf : ap_t('TEST.A_KEIN_SYSTEMCTL')));
     }
 
+    // ISCONFIGURED urteilt nur, wenn apcupsd NICHT laeuft.
+    //
+    // Am 06.09.2026 an einem laufenden LoxBerry gemessen: ISCONFIGURED=no
+    // UND "systemctl is-active apcupsd" = active. Die systemd-Unit liest
+    // /etc/default/apcupsd nicht - sie hat keine EnvironmentFile-Zeile und
+    // ruft prestart und apcupsd unmittelbar auf. Nur das alte init-Skript
+    // wertet den Schalter aus.
+    //
+    // Bis 1.2.5 stand hier ein Kreuz, sobald der Wert "no" war. Es sagte
+    // nichts ueber den Pruefling und schickte den Anwender an eine Datei,
+    // die auf seinem System niemand liest - waehrend die wirkliche Ursache
+    // (kein USB-Geraet) unberuehrt blieb. Ein rotes Kreuz, das nichts
+    // bedeutet, ist schlimmer als keine Pruefung.
     $isconf = null;
     if (is_readable('/etc/default/apcupsd')) {
         $isconf = strpos((string) @file_get_contents('/etc/default/apcupsd'),
                          'ISCONFIGURED=yes') !== false;
     }
-    $jn = $isconf ? ap_t('ALLGEMEIN.JA') : ap_t('ALLGEMEIN.NEIN');
-    ap_pruefzeile(ap_t('TEST.F_ISCONFIGURED'), $zaehle($isconf),
-        $isconf === null ? ap_e(ap_t('TEST.A_DATEI_FEHLT')) : ap_e($jn));
+    if ($isconf === null) {
+        ap_pruefzeile(ap_t('TEST.F_ISCONFIGURED'), $zaehle(null),
+            ap_e(ap_t('TEST.A_DATEI_FEHLT')));
+    } elseif ($laeuft === true) {
+        // Laeuft er, ist der Wert ohne Belang - Hinweis, kein Urteil.
+        $jn = $isconf ? ap_t('ALLGEMEIN.JA') : ap_t('ALLGEMEIN.NEIN');
+        ap_pruefzeile(ap_t('TEST.F_ISCONFIGURED'), $zaehle(null),
+            ap_e($jn) . ' &mdash; ' . ap_e(ap_t('TEST.A_ISCONF_EGAL')));
+    } else {
+        // Er laeuft nicht: JETZT kann der Schalter die Ursache sein.
+        $jn = $isconf ? ap_t('ALLGEMEIN.JA') : ap_t('ALLGEMEIN.NEIN');
+        ap_pruefzeile(ap_t('TEST.F_ISCONFIGURED'), $zaehle($isconf), ap_e($jn));
+    }
 
     // --- Der eigene Dienst -------------------------------------------------
     $z = $zaehle($pid > 0);

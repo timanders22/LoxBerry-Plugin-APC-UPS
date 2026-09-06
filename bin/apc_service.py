@@ -45,6 +45,7 @@ import atexit
 import fcntl
 import json
 import logging
+import logging.handlers
 import os
 import signal
 import socket
@@ -66,7 +67,15 @@ import apc_common as gem   # noqa: E402
 _handlers = []
 try:
     os.makedirs(gem.LOG_DIR, exist_ok=True)
-    _handlers.append(logging.FileHandler(os.path.join(gem.LOG_DIR, "apc_ups_ng.log")))
+    # WatchedFileHandler, NICHT FileHandler.
+    # Am Geraet gemessen (06.09.2026, LoxBerry 4.0.0.15): log/plugins liegt auf
+    # einer Ramdisk (/dev/zram0). Wird sie geleert, ist die Protokolldatei fort -
+    # und ein FileHandler, der sie beim Start EINMAL geoeffnet hat, schreibt bis
+    # zum naechsten Neustart in einen geloeschten Inode. Sichtbar wird davon
+    # nichts. Der WatchedFileHandler prueft bei jeder Zeile Geraetenummer und
+    # Inode und oeffnet noetigenfalls neu; er steht in der Standardbibliothek.
+    # Aufgefallen am Heimkino-Dienst, der sieben Stunden ohne Protokoll lief.
+    _handlers.append(logging.handlers.WatchedFileHandler(os.path.join(gem.LOG_DIR, "apc_ups_ng.log")))
 except OSError:
     _handlers.append(logging.StreamHandler(sys.stderr))
 
@@ -169,9 +178,27 @@ class Mqtt:
             if not leise:
                 log.warning("Kein MQTT-Broker in general.json gefunden")
             return False
-        try:
-            client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
-        except (AttributeError, TypeError):
+        # Die Rueckrufform: neueste zuerst, dann abwaerts.
+        #
+        # Am 06.09.2026 gemessen: auf dem Geraet liegt paho-mqtt 2.1.0, und
+        # VERSION1 schreibt dort bei JEDEM Start eine DeprecationWarning auf
+        # die Fehlerausgabe - die landet ueber die Umleitung des
+        # Startskripts mitten im Protokoll:
+        #     DeprecationWarning: Callback API version 1 is deprecated
+        # Dieses Plugin setzt gar keine Rueckrufe (nur publish, will_set,
+        # connect, loop_start); zwischen den Fassungen unterscheidet sich
+        # nur die Signatur der Rueckrufe. VERSION2 ist damit unbedenklich.
+        client = None
+        for art in ('VERSION2', 'VERSION1'):
+            wert = getattr(getattr(mqtt, 'CallbackAPIVersion', None), art, None)
+            if wert is None:
+                continue
+            try:
+                client = mqtt.Client(wert)
+                break
+            except (AttributeError, TypeError, ValueError):
+                client = None
+        if client is None:
             client = mqtt.Client()      # paho-mqtt 1.x
         if zugang["user"]:
             client.username_pw_set(zugang["user"], zugang["pass"] or "")
