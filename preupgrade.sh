@@ -59,9 +59,16 @@ if [ -f "$PIDF" ]; then
         if kill -0 "$P" 2>/dev/null && grep -qa "apc_service.py" "/proc/$P/cmdline" 2>/dev/null; then
             kill -9 "$P" 2>/dev/null
         fi
+        # Nur HIER gemeldet: eine liegengebliebene PID-Datei allein ist kein
+        # laufender Dienst. Bis 1.2.8 stand die Zeile hinter dem schliessenden
+        # fi und kam damit auch dann, wenn die Nummer in der Datei zu keinem
+        # lebenden Vorgang gehoerte - das Protokoll behauptete dann etwas,
+        # was nicht geschehen war.
+        echo "<INFO> Laufender Dienst angehalten."
+    else
+        echo "<INFO> Der Dienst lief nicht - es war nichts anzuhalten."
     fi
     rm -f "$PIDF"
-    echo "<INFO> Laufender Dienst angehalten."
 fi
 
 

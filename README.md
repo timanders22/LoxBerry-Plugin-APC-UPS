@@ -4,6 +4,32 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.8
+
+**Das Installationsprotokoll behauptete, einen Dienst angehalten zu haben, der
+gar nicht lief.** Die Meldung „Laufender Dienst angehalten." hing allein an der
+Existenz der PID-Datei — und eine liegengebliebene PID-Datei ist kein laufender
+Dienst. Sie steht jetzt **innerhalb** der Lebendprüfung, die es darüber ohnehin
+schon gab; lag die Datei nur herum, heißt es „Der Dienst lief nicht — es war
+nichts anzuhalten."
+
+**Am Verhalten ändert sich nichts** — es wird nichts anders beendet, nur anders
+gemeldet.
+
+Geeicht am Gerät (LoxBerry 4.0.0.15), in beide Richtungen, gegen einen
+Wegwerfbaum mit einer nachweislich toten Prozessnummer: 1.2.7 meldete dort
+„Laufender Dienst angehalten.", 1.2.8 meldet „Der Dienst lief nicht". Ohne
+PID-Datei kommt in beiden Fassungen keine Zeile.
+
+Dazu, aus einem früheren Durchgang und beides ohne Wirkung auf die
+Anlage: die **Sprachdateien sind umgeordnet** (338 gegen 338 Schlüssel,
+gleiche Werte, gleiche Dateigröße auf das Byte — nur die Reihenfolge folgt
+jetzt dem Erzeuger; zeilenweise sortiert sind alt und neu identisch). Und
+`index.php` liest `$_SERVER['REQUEST_METHOD']` jetzt mit `isset()`: auf der
+Anlage setzt die SAPI den Schlüssel immer, ein Prüflauf über die
+Kommandozeile nicht — dort meldete die Zeile unter PHP 7.4 einen Hinweis
+und unter 8.4 eine Warnung.
+
 ## Neu in 1.2.6
 
 **Der Dienst konnte sein Protokoll verlieren, ohne dass es auffiel.**

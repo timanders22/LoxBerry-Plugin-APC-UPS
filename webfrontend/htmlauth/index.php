@@ -127,7 +127,12 @@ if (ap_roh($ap_cfg, 'formtoken') === '') {
 }
 $ap_formtoken = ap_roh($ap_cfg, 'formtoken');
 
-$ap_ist_post = ($_SERVER['REQUEST_METHOD'] === 'POST');
+/* Mit isset: unter der Kommandozeile gibt es REQUEST_METHOD nicht. Auf der
+ * Anlage setzt die SAPI ihn immer, ein Prueflauf ueber die Kommandozeile aber
+ * nicht - dort meldete diese Zeile unter 7.4 einen Hinweis und unter 8.4 eine
+ * Warnung. Form wie im uebrigen Bestand (13.09.2026). */
+$ap_ist_post = (isset($_SERVER['REQUEST_METHOD'])
+                && $_SERVER['REQUEST_METHOD'] === 'POST');
 if ($ap_ist_post) {
     $mit = isset($_POST['ap_form']) ? (string) $_POST['ap_form'] : '';
     if ($ap_formtoken === '' || !hash_equals($ap_formtoken, $mit)) {
