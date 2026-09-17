@@ -243,10 +243,15 @@ class Mqtt:
     def senden(self, unterthema, wert):
         if not self.client:
             return
+        text = "" if wert is None else str(wert)
+        # Ein LEERER Wert geht nie retained hinaus: eine leere Nutzlast mit
+        # retain loescht das zurueckbehaltene Thema im Broker (Regeln/07, am
+        # Broker belegt 14.09.2026). wert_text() liefert "" fuer ein Feld, das
+        # die USV nicht meldet - bis 1.2.9 verschwand damit z. B. "model" aus
+        # dem Broker, obwohl die Tabelle es als retained ansagt.
         try:
-            self.client.publish(self.praefix + "/" + unterthema,
-                                "" if wert is None else str(wert),
-                                qos=0, retain=(unterthema in self.retain))
+            self.client.publish(self.praefix + "/" + unterthema, text,
+                                qos=0, retain=(unterthema in self.retain and text != ""))
         except Exception as fehler:  # noqa: BLE001
             log.error("MQTT-Veroeffentlichung fehlgeschlagen: %s", fehler)
             self.verbunden = False
