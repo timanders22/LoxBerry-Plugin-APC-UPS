@@ -589,6 +589,32 @@ function ap_test_ausfuehren($was)
                       $info['art'], $info['retain'] ? 'R' : '-', ap_thema_text($k));
             }
             $t .= "\n" . ap_t('MQTT.RETAIN_KURZ') . "\n";
+            // Prueft die Hausregel, nicht nur die Anzeige: das Lebenszeichen
+            // ist nie retained (Regeln/07, Hausstandard 03.09.2026,
+            // bekraeftigt 17.09.2026). Bis 1.2.9 waren service/online und
+            // timestamp retained - der Broker sagte damit "lebt" fuer einen
+            // Dienst, der seit Tagen stand. Die Zeile urteilt ueber eine
+            // Menge und sagt deshalb zuerst, ob sie leer ist.
+            $falsch = array();
+            $gefunden = 0;
+            foreach (ap_lebenszeichen_themen() as $k) {
+                if (!isset($themen[$k])) {
+                    continue;
+                }
+                $gefunden++;
+                if ($themen[$k]['retain']) {
+                    $falsch[] = $k;
+                }
+            }
+            $t .= "\n";
+            if ($gefunden === 0) {
+                $t .= sprintf(ap_t('TEST.M_LEBEN_FEHLT'),
+                      implode(', ', ap_lebenszeichen_themen())) . "\n";
+            } elseif ($falsch) {
+                $t .= sprintf(ap_t('TEST.M_LEBEN_ROT'), implode(', ', $falsch)) . "\n";
+            } else {
+                $t .= sprintf(ap_t('TEST.M_LEBEN_OK'), $gefunden) . "\n";
+            }
             return array(ap_t('TEST.K_MQTT'), $t);
 
         case 'melden':

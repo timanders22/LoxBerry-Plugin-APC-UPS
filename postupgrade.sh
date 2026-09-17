@@ -138,4 +138,88 @@ fi
 
 echo "<INFO> Naechster Schritt: Reiter Test -> Jetzt abfragen."
 
+# ---------- Ende der Installation: Marke abraeumen, Dienst starten ----------
+# preupgrade.sh hat die Marke "Aktualisierung laeuft" gelegt, damit der
+# Waechter in der Luecke vor postinstall.sh nichts startet. Dieses Skript
+# laeuft beim Upgrade als letztes (plugininstall.pl: postinstall, dann
+# postupgrade) und hat die Konfiguration oben zurueckgestellt.
+#
+# Gestartet wird hier, weil sonst bis zu fuenf Minuten lang KEIN Dienst
+# laeuft: in WSL gemessen (Pruefung-Upgradeluecke-2026-09-17, Fall ohne
+# Takt) stand nach dem Upgrade kein Dienst, erst der naechste Takt startete
+# ihn. Nach Regeln/06 laeuft nach einem Update wieder, was lief, und ein
+# bewusst angehaltener Dienst bleibt angehalten. In diesem Plugin haelt der
+# Anwender den Dienst ueber enabled=0 an; nur dann laesst der Waechter ihn
+# stehen. Gestartet wird deshalb unter genau der Bedingung des Waechters -
+# durch den Waechter selbst: er startet als loxberry, prueft die Wirkung und
+# startet keinen zweiten.
+APC_BASE="${5:-$LBHOMEDIR}"
+APC_PDIR="${3:-apc_ups_ng}"
+APC_NAME="${2:-apc_ups_ng}"
+MARKE="$APC_BASE/data/plugins/$APC_PDIR.upgrade_laeuft"
+APC_DIENST="$APC_BASE/bin/plugins/$APC_PDIR/apc_service.py"
+WAECHTER="$APC_BASE/system/cron/cron.05min/$APC_NAME"
+
+# Argumentweise (Regeln/03): argv[0] ein Python, argv[1] genau das Skript.
+apc_ist_dienst() {
+    [ -r "/proc/$1/cmdline" ] || return 1
+    tr '\0' '\n' 2>/dev/null < "/proc/$1/cmdline" | {
+        IFS= read -r a0 || exit 1
+        IFS= read -r a1 || exit 1
+        case "${a0##*/}" in python|python3|python3.*) ;; *) exit 1 ;; esac
+        [ "$a1" = "$2" ]
+    }
+}
+apc_dienste_suchen() {
+    for d in /proc/[0-9]*; do
+        [ "$(stat -c %u "$d" 2>/dev/null)" = "$2" ] || continue
+        apc_ist_dienst "${d#/proc/}" "$1" && echo "${d#/proc/}"
+    done
+    return 0
+}
+APC_UID=$(id -u loxberry 2>/dev/null || id -u)
+
+if [ -f "$MARKE" ]; then
+    # Solange die Marke liegt, stammt jeder eigene Dienst aus der Zeit vor
+    # oder waehrend der Installation - etwa ein Takt, der die Marke um
+    # Sekunden verpasst hat - und laeuft mit dem alten Code und womoeglich
+    # ohne PID-Datei. Er wird beendet, damit danach genau einer laeuft.
+    ALT=$(apc_dienste_suchen "$APC_DIENST" "$APC_UID")
+    if [ -n "$ALT" ]; then
+        kill $ALT 2>/dev/null
+        i=0
+        while [ $i -lt 10 ] && [ -n "$(apc_dienste_suchen "$APC_DIENST" "$APC_UID")" ]; do
+            sleep 1
+            i=$((i + 1))
+        done
+        REST=$(apc_dienste_suchen "$APC_DIENST" "$APC_UID")
+        [ -n "$REST" ] && kill -9 $REST 2>/dev/null
+        echo "<INFO> Ein Dienst aus der Zeit der Installation lief noch und wurde beendet (PID $(echo $ALT))."
+    fi
+fi
+rm -f "$MARKE"
+if [ -e "$MARKE" ]; then
+    echo "<WARNING> Die Marke $MARKE liess sich nicht entfernen."
+    echo "<WARNING> Der Waechter startet den Dienst erst, wenn sie eine Stunde alt ist."
+fi
+
+if grep -q '^enabled=0' "$PCONFIG/apc_ups_ng.cfg" 2>/dev/null; then
+    echo "<INFO> Das Plugin ist ausgeschaltet (enabled=0) - der Dienst wird nicht gestartet."
+elif [ -x "$WAECHTER" ]; then
+    WAECHTER_AUS=$("$WAECHTER" 2>&1)
+    [ -n "$WAECHTER_AUS" ] && echo "$WAECHTER_AUS" | sed 's/^/<INFO> /'
+    PIDF=/run/shm/apc_ups_ng.pid
+    [ -f "$PIDF" ] || PIDF="$APC_BASE/log/plugins/$APC_PDIR/apc_ups_ng.pid"
+    NEU=$(cat "$PIDF" 2>/dev/null)
+    if [ -n "$NEU" ] && kill -0 "$NEU" 2>/dev/null && apc_ist_dienst "$NEU" "$APC_DIENST"; then
+        echo "<OK> Der Dienst laeuft (PID $NEU)."
+    else
+        echo "<WARNING> Der Dienst laeuft nicht. Der Waechter versucht es alle fuenf Minuten;"
+        echo "<WARNING> die Ursache steht im Reiter Logdateien."
+    fi
+else
+    echo "<INFO> Der Waechter liegt nicht unter $WAECHTER - der Dienst wird nicht gestartet."
+    echo "<INFO> Starten im Reiter Test."
+fi
+
 exit 0

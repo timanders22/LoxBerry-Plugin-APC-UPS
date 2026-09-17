@@ -66,8 +66,24 @@ LOG_DIR = "REPLACELBPLOGDIR"
 if LOG_DIR.startswith("REPLACE"):
     LOG_DIR = lb_wurzel_ermitteln() + "/log/plugins/" + PLUGIN_NAME
 
+DATA_DIR = "REPLACELBPDATADIR"
+if DATA_DIR.startswith("REPLACE"):
+    DATA_DIR = lb_wurzel_ermitteln() + "/data/plugins/" + PLUGIN_NAME
+
 HOME_DIR = os.environ.get("LBHOMEDIR") or lb_wurzel_ermitteln()
 CONFIG_FILE = os.path.join(CONFIG_DIR, "apc_ups_ng.cfg")
+
+# Die Zugangsdaten des MQTT-Brokers stehen nicht in der Plugin-Konfiguration,
+# sondern in der Systemdatei von LoxBerry. Der Dienst beobachtet auch ihre
+# Aenderungszeit - bis 1.2.10 bemerkte er einen Brokerwechsel erst, wenn
+# jemand ausserdem die Plugin-Einstellungen speicherte.
+GENERAL_FILE = os.path.join(HOME_DIR, "config", "system", "general.json")
+
+# Merker: die zurueckbehaltenen Altwerte des Lebenszeichens (service/online,
+# timestamp) sind einmal aus dem Broker geloescht. Er liegt IM Datenordner
+# und damit absichtlich nicht upgradefest: nach einem Upgrade wird noch
+# einmal abgeraeumt, und das kostet zwei Nachrichten.
+RETAIN_MERKER = os.path.join(DATA_DIR, "retain_lebenszeichen_geraeumt")
 
 
 def _zeitzone_setzen():
@@ -781,7 +797,7 @@ def log_kappen(pfad, grenze_kb=512):
 # ---------------------------------------------------------------------------
 
 def mqtt_zugangsdaten():
-    pfad = os.path.join(HOME_DIR, "config", "system", "general.json")
+    pfad = GENERAL_FILE
     try:
         with open(pfad, "r", encoding="utf-8") as fh:
             daten = json.load(fh)

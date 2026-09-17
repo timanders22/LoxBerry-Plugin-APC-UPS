@@ -270,53 +270,170 @@ function ap_pid_datei()
                               : ap_paths()['logdir'] . '/apc_ups_ng.pid';
 }
 
+/** Der eigene Dienst mit vollstaendigem Pfad, nicht nur mit Dateinamen. */
+function ap_dienst_skript()
+{
+    return ap_paths()['bindir'] . '/apc_service.py';
+}
+
+/**
+ * Ist die Prozessnummer $pid ein Dienst dieses Plugins?
+ *
+ * Argumentweise, genau wie preupgrade.sh, postupgrade.sh, cron/cron.05min
+ * und uninstall/uninstall es tun (Regeln/03): argv[0] muss ein Python sein,
+ * argv[1] genau der eigene Dienstpfad. Ein Editor mit der Datei offen, eine
+ * Suche mit dem Pfad im Muster oder ein gleichnamiges Skript aus einem
+ * anderen Baum wird damit nie getroffen.
+ *
+ * Bis 1.2.10 stand hier strpos() ueber die ganze Befehlszeile. Das trifft
+ * jeden Prozess, in dem die Zeichenkette irgendwo vorkommt - auch einen
+ * fremden Vorgang, der eine wiederverwendete Prozessnummer aus einer
+ * liegengebliebenen PID-Datei geerbt hat. In WSL gemessen
+ * (Pruefung-APC-UPS-1.2.10, Fall oberflaeche): "Dienst anhalten" beendete
+ * einen Prozess "python3 -c ... <Dienstpfad>", der nie unser Dienst war.
+ */
+function ap_ist_dienst($pid, $skript)
+{
+    $pid = (int) $pid;
+    if ($pid <= 0) {
+        return false;
+    }
+    $roh = @file_get_contents('/proc/' . $pid . '/cmdline');
+    if (!is_string($roh) || $roh === '') {
+        return false;
+    }
+    $teile = explode("\0", $roh);
+    if (count($teile) < 2) {
+        return false;
+    }
+    $a0 = basename($teile[0]);
+    if ($a0 !== 'python' && $a0 !== 'python3' && strpos($a0, 'python3.') !== 0) {
+        return false;
+    }
+    return $teile[1] === $skript;
+}
+
+/**
+ * Unter welcher Benutzernummer laeuft der Dienst? -1 heisst "unbekannt".
+ *
+ * Gestartet wird er als loxberry (cron/cron.05min, daemon/daemon). Laesst
+ * sich die Nummer nicht ermitteln - ohne die POSIX-Erweiterung geht es
+ * nicht -, wird NICHT gefiltert, und die Erkennung stuetzt sich allein auf
+ * die Befehlszeile. Das ist hier die geschlossene Seite: ein uebersehener
+ * Dienst bekaeme beim naechsten Speichern einen zweiten danebengestellt,
+ * waehrend ein Beenden ueber die Benutzergrenze hinweg ohnehin scheitert.
+ */
+function ap_dienst_uid()
+{
+    if (function_exists('posix_getpwnam')) {
+        $pw = @posix_getpwnam('loxberry');
+        if (is_array($pw) && isset($pw['uid'])) {
+            return (int) $pw['uid'];
+        }
+    }
+    return -1;
+}
+
+/**
+ * Alle laufenden Dienste dieses Plugins, aufsteigend nach Prozessnummer.
+ *
+ * Auch die OHNE PID-Datei. Die Dateisperre des Dienstes haengt an dieser
+ * Datei: ist sie geloescht, laesst sie den naechsten Start durch, und es
+ * laufen zwei Dienste an derselben USV (Befund B5 der Upgrade-Luecke, in
+ * WSL gemessen). Die Oberflaeche sah bis 1.2.10 nur die PID-Datei und
+ * stellte beim Speichern einen zweiten daneben.
+ */
+function ap_dienste_suchen()
+{
+    clearstatcache();
+    $skript = ap_dienst_skript();
+    $uid = ap_dienst_uid();
+    $treffer = array();
+    // Erst nachsehen, ob es /proc ueberhaupt gibt. Ohne diese Zeile schrieb
+    // ein Lauf auf einem System ohne /proc bei JEDEM Aufruf eine Warnung -
+    // und eine Warnung, die immer kommt, liest am Ende niemand mehr.
+    if (!@is_dir('/proc')) {
+        return $treffer;
+    }
+    $dh = @opendir('/proc');
+    if ($dh === false) {
+        return $treffer;
+    }
+    while (($e = readdir($dh)) !== false) {
+        if (!ctype_digit($e)) {
+            continue;
+        }
+        if ($uid >= 0) {
+            $o = @fileowner('/proc/' . $e);
+            if ($o === false || (int) $o !== $uid) {
+                continue;
+            }
+        }
+        if (ap_ist_dienst($e, $skript)) {
+            $treffer[] = (int) $e;
+        }
+    }
+    closedir($dh);
+    sort($treffer);
+    return $treffer;
+}
+
 /**
  * Prozessnummer des laufenden Dienstes, oder 0.
  *
- * Frueher stand hier  pgrep -o -f apc_service.py.  Das trifft jeden Prozess,
- * in dessen Befehlszeile die Zeichenkette vorkommt - auch einen Editor, der
- * die Datei geoeffnet hat, oder ein Sicherungsskript, das den Ordner
- * durchsucht. Zum Nachsehen war das ungenau, zum Beenden gefaehrlich.
+ * Zuerst die PID-Datei - sie ist die billige und die richtige Antwort,
+ * solange sie stimmt -, danach die Suche ueber /proc. Beide Wege pruefen
+ * die Befehlszeile argumentweise.
  */
 function ap_dienst_pid()
 {
+    clearstatcache();
     $f = ap_pid_datei();
-    if (!is_file($f)) {
-        return 0;
+    if (is_file($f)) {
+        $pid = (int) trim((string) @file_get_contents($f));
+        if (ap_ist_dienst($pid, ap_dienst_skript())) {
+            return $pid;
+        }
     }
-    $pid = (int) trim((string) @file_get_contents($f));
-    if ($pid <= 0) {
-        return 0;
-    }
-    // Lebt der Prozess, und ist er wirklich unserer? Prozessnummern werden
-    // wiederverwendet.
-    if (!@file_exists('/proc/' . $pid)) {
-        return 0;
-    }
-    $cmd = (string) @file_get_contents('/proc/' . $pid . '/cmdline');
-    return strpos($cmd, 'apc_service.py') !== false ? $pid : 0;
+    $alle = ap_dienste_suchen();
+    return $alle ? $alle[0] : 0;
 }
 
 function ap_dienst($aktion)
 {
     $p = ap_paths();
-    $skript = $p['bindir'] . '/apc_service.py';
+    $skript = ap_dienst_skript();
     $meldungen = array();
     if (in_array($aktion, array('stop', 'restart'), true)) {
-        $pid = ap_dienst_pid();
-        if ($pid > 0) {
-            // Punktgenau beenden, nicht ueber die Befehlszeile suchen.
-            @exec('kill ' . (int) $pid . ' 2>&1', $meldungen);
-            for ($i = 0; $i < 10 && ap_dienst_pid() === $pid; $i++) {
+        // ALLE eigenen Dienste, nicht nur den aus der PID-Datei: sonst
+        // bleibt eine Waise stehen, und der neue Dienst teilt sich die USV
+        // mit ihr. Gesucht wird argumentweise, beendet wird nur, was diese
+        // Suche gefunden hat.
+        $ziel = ap_dienste_suchen();
+        if ($ziel) {
+            foreach ($ziel as $pid) {
+                @exec('kill ' . (int) $pid . ' 2>&1', $meldungen);
+            }
+            for ($i = 0; $i < 10 && ap_dienste_suchen(); $i++) {
                 sleep(1);
             }
-            if (ap_dienst_pid() === $pid) {
+            foreach (ap_dienste_suchen() as $pid) {
                 @exec('kill -9 ' . (int) $pid . ' 2>&1', $meldungen);
                 sleep(1);
             }
-            $meldungen[] = 'Dienst ' . $pid . ' beendet.';
+            $meldungen[] = count($ziel) > 1
+                ? 'Dienste ' . implode(', ', $ziel) . ' beendet.'
+                : 'Dienst ' . $ziel[0] . ' beendet.';
         } else {
             $meldungen[] = 'Es lief kein Dienst.';
+        }
+        // Eine PID-Datei ohne lebenden eigenen Dienst dahinter ist ein
+        // Ueberbleibsel und wird entfernt - sie gehoerte sonst womoeglich
+        // bald einem fremden Vorgang.
+        $pf = ap_pid_datei();
+        if (is_file($pf) && ap_dienst_pid() === 0) {
+            @unlink($pf);
+            $meldungen[] = 'Eine liegengebliebene PID-Datei wurde entfernt.';
         }
     }
     if (in_array($aktion, array('start', 'restart'), true)) {
@@ -408,6 +525,24 @@ function ap_gateway_autostart()
 /* ==================================================================
  * Themenliste - EINE Quelle, gelesen aus bin/apc_themen.json
  * ================================================================== */
+
+/**
+ * Die Themen, die das Lebenszeichen ausmachen.
+ *
+ * Nach Regeln/07 (Hausstandard 03.09.2026, bekraeftigt 17.09.2026) ist das
+ * Lebenszeichen NIE retained: zurueckbehalten zeigte es immer "lebt". Dazu
+ * gehoert der Gesundheitsmerker (hier service/online) genauso wie der
+ * Zeitstempel. Der Last Will ist Teil davon und geht ebenfalls fluechtig
+ * hinaus - er steht nur in bin/apc_service.py, nicht in der Themenliste.
+ *
+ * Nicht dazu gehoert 'valid': das ist ein ZUSTAND der Quelle (hat apcaccess
+ * gueltige Werte geliefert?), in derselben Klasse wie comm_lost - und
+ * Zustaende sind retained.
+ */
+function ap_lebenszeichen_themen()
+{
+    return array('service/online', 'timestamp');
+}
 
 /**
  * Die Themen als Feld: Schluessel => array(art, einheit, min, max, retain).

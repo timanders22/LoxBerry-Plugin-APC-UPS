@@ -4,6 +4,112 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.10
+
+**Nach einem Update konnte der Dienst unter dem falschen Themenpräfix senden.**
+LoxBerry legt beim Update die Cron-Datei rund eine Minute vor den
+Hakenskripten neu an. Fiel der Fünf-Minuten-Wächter in diese Lücke, startete
+er den Dienst mit der mitgelieferten Vorgabe-Konfiguration. Der Dienst las die
+kurz darauf zurückgespielte Konfiguration zwar ein, blieb aber beim Präfix
+`apcups` — gemessen in WSL: 37 Werte unter `apcups`, keiner unter dem
+eingestellten Präfix, bis zum nächsten Neustart des Dienstes. Wer ein eigenes
+Präfix eingestellt hat, bekam in Loxone keine frischen Werte mehr.
+
+Behoben an drei Stellen:
+
+* Der Dienst zieht beim Neueinlesen der Konfiguration **Präfix, MQTT-Schalter
+  und MQTT-Zugang** nach. Ändert sich eines davon, trennt er die Verbindung
+  so, wie er es beim Beenden tut (`service/online` geht unter dem alten Präfix
+  mit `0` hinaus), und verbindet sich unter dem neuen neu — ohne Neustart.
+  Auch `mqtt=0` wirkt jetzt sofort; bisher sendete der Dienst weiter.
+* `preupgrade.sh` legt als Erstes die Marke
+  `data/plugins/apc_ups_ng.upgrade_laeuft` an. Solange sie jünger als eine
+  Stunde ist, startet der Wächter nichts; eine ältere oder unlesbare Marke
+  gilt nicht. `postupgrade.sh` entfernt sie am Ende der Installation und
+  **startet den Dienst sofort** über den Wächter — bisher lief nach einem
+  Update bis zu fünf Minuten lang kein Dienst. Ist das Plugin ausgeschaltet
+  (`enabled=0`), bleibt der Dienst aus. `uninstall` räumt die Marke weg.
+* Ein Dienst **ohne PID-Datei** wird jetzt erkannt: `preupgrade.sh`,
+  `postupgrade.sh` und `uninstall` beenden ihn, der Wächter startet neben ihm
+  keinen zweiten. Erkannt wird er nur an der eigenen Befehlszeile (Python mit
+  genau diesem Skript) und am Benutzer des Dienstes — ein Editor mit der Datei
+  offen wird nie getroffen. Bisher liefen in diesem Fall nach dem Update zwei
+  Dienste.
+
+Dazu: `postinstall.sh` fällt wie die übrigen Hakenskripte auf das fünfte
+Argument zurück, wenn die Umgebung leer ist. Ohne das zeigte der
+Protokollordner auf `/apc_ups_ng`; die Protokolldatei entstand nicht, und die
+Python-Dateien wurden nicht ausführbar gesetzt.
+
+Gemessen in WSL, nicht am Gerät: `Pruefung-APC-UPS-1.2.10/` (elf Fälle, 94
+Prüfzeilen; 1.2.10 vor der Änderung 47 rot, danach 0), jede Korrektur einzeln
+zurückgebaut und dabei rot geworden.
+
+### Nachtrag 1.2.10 — Lebenszeichen, verwaiste Dienste, fremde Prozessnummern
+
+**Das Lebenszeichen ging zurückbehalten hinaus.** `<Präfix>/service/online`
+und `<Präfix>/timestamp` waren bis 1.2.9 retained, ebenso der Last Will. Der
+Hausstandard verlangt das Gegenteil: Zustände retained, Messwerte mit
+Zeitbezug nicht, **das Lebenszeichen nie** — zurückbehalten zeigt es auch dann
+noch „lebt“, wenn der Dienst seit Tagen steht, und ein Zeitstempel, der selbst
+im Broker liegen bleibt, kann nicht mehr beantworten, wie frisch ein Wert ist.
+Beide Themen sind jetzt flüchtig, der Last Will ebenfalls; damit sind 22 der
+38 Themen retained statt 24. Unverändert retained bleibt `valid`: das ist ein
+Zustand der Quelle (hat `apcaccess` brauchbare Werte geliefert?) in derselben
+Klasse wie `comm_lost`, kein Lebenszeichen. Was sich dadurch in Loxone ändert:
+nach einem Neustart von Broker oder Gateway stehen `service_online` und
+`timestamp` nicht mehr sofort an, sondern mit dem nächsten Abfragetakt (ab
+Werk 30 Sekunden). Genau das ist der Zweck — ein Lebenszeichen, das sofort
+anliegt, ohne dass jemand es geschickt hat, ist keines.
+
+**Wer von 1.2.9 oder früher kommt, hat die alten Werte noch im Broker
+stehen.** Ein zurückbehaltenes Thema verschwindet nicht dadurch, dass niemand
+mehr retained sendet. Der Dienst löscht deshalb beim ersten Verbindungsaufbau
+nach dem Update beide Themen **einmal** mit leerer Nutzlast und `retain` — so
+löscht ein Broker ein zurückbehaltenes Thema — und schickt den gültigen Wert
+unmittelbar hinterher; das MQTT-Gateway reicht eine leere Nutzlast sonst als
+leeren Wert an den Miniserver weiter. Dass es nur einmal geschieht, merkt sich
+`data/plugins/apc_ups_ng/retain_lebenszeichen_geraeumt`. Diese Datei überlebt
+ein Upgrade absichtlich nicht: nach jedem Update wird noch einmal abgeräumt,
+das kostet zwei Nachrichten und fängt ein zwischenzeitlich gewechseltes
+Präfix mit ab. Der Reiter **Test** prüft die Regel seither selbst und
+beanstandet jedes Lebenszeichen-Thema, das wieder retained geriete.
+
+**Die Oberfläche startete neben einem verwaisten Dienst einen zweiten.**
+`ap_dienst_pid()` kannte nur die PID-Datei und prüfte die Befehlszeile als
+Teilzeichenkette. Fehlte die Datei, während der Dienst lief, sah „Speichern“
+keinen Dienst und startete einen weiteren — die Dateisperre hängt an der
+Datei und lässt den nächsten Start durch. Die Oberfläche sucht jetzt dieselben
+Prozesse wie die Hakenskripte: argumentweise (Python mit genau diesem Skript
+als erstem Argument) und beim Benutzer des Dienstes. „Speichern“ und „Dienst
+neu starten“ beenden dabei **alle** eigenen Dienste, auch die ohne PID-Datei.
+
+**Ein `kill` an eine Prozessnummer, die inzwischen einem anderen gehört.**
+`preupgrade.sh`, `uninstall/uninstall` und die Oberfläche schickten das erste
+Signal ungeprüft an die Zahl aus der PID-Datei; nur das harte Beenden danach
+war abgesichert. Prozessnummern werden aber wiederverwendet. Geprüft wird
+jetzt **vor** dem ersten Signal; gehört die Nummer einem fremden Vorgang,
+wird nichts beendet, die Datei wird entfernt und das Installationsprotokoll
+sagt es.
+
+**Ein Brokerwechsel in `config/system/general.json` wirkte erst beim nächsten
+Speichern.** Der Dienst beobachtete nur die Änderungszeit seiner eigenen
+Konfiguration. Er beobachtet jetzt beide Dateien; ändern sich Broker, Port
+oder Zugangsdaten, baut er die Verbindung neu auf, ohne neu zu starten. Eine
+Berührung ohne inhaltliche Änderung lässt die Verbindung stehen.
+
+**`uninstall` ließ die Zweitschrift liegen.** `preupgrade.sh` legt
+`config/plugins/apc_ups_ng.backup.apc_ups_ng.cfg` neben den Konfigordner —
+also außerhalb dessen, was LoxBerry beim Deinstallieren löscht. Sie trägt den
+Formulartoken. Das Deinstallationsskript überschreibt die Datei jetzt, löscht
+sie und meldet erst danach, was es vorgefunden hat. (Überschreiben ist auf
+Speicherkarte und eMMC kein sicheres Löschen — der Flash-Controller
+entscheidet, wohin geschrieben wird; es ist der Unterschied zwischen „steht
+noch da“ und „muss man suchen“.)
+
+Gemessen in WSL, nicht am Gerät: dieselben Prüfstände, um die Fälle
+`oberflaeche`, `fremd_pid`, `retain` und `general_live` erweitert.
+
 ## Neu in 1.2.8
 
 **Das Installationsprotokoll behauptete, einen Dienst angehalten zu haben, der
@@ -434,13 +540,13 @@ lief bis 1.1.6 auseinander.
 | `<Präfix>/model` | text | — | ja | Modell |
 | `<Präfix>/serial` | text | — | ja | Seriennummer |
 | `<Präfix>/battery_date` | text | — | ja | Akku eingebaut am |
-| `<Präfix>/timestamp` | analog | s | ja | Zeitpunkt der Messung |
+| `<Präfix>/timestamp` | analog | s | nein | Zeitpunkt der Messung |
 | `<Präfix>/valid` | digital | — | ja | Letzte Abfrage brauchbar |
-| `<Präfix>/service/online` | digital | — | ja | Dienst läuft |
+| `<Präfix>/service/online` | digital | — | nein | Dienst läuft |
 | `<Präfix>/event` | text | — | ja | Letztes Ereignis |
 | `<Präfix>/last_error` | text | — | nein | Letzte Fehlermeldung |
 
-Voreingestelltes Präfix: `apcups`. **Nicht alle Themen sind retained** — 24 von 38 sind es. Zustände bleiben im Broker liegen,
+Voreingestelltes Präfix: `apcups`. **Nicht alle Themen sind retained** — 22 von 38 sind es. Zustände bleiben im Broker liegen,
 Messwerte nicht: wer sich nach einer Stunde neu verbindet, bekäme sonst
 eine stundenalte Restlaufzeit serviert und hielte sie für aktuell. Wie
 frisch ein Wert ist, sagt `<Präfix>/timestamp`.

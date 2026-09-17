@@ -156,6 +156,20 @@ class Mqtt:
     WARTE_MIN = 60
     WARTE_MAX = 300
 
+    # Themen, die bis 1.2.9 zurueckbehalten hinausgingen, obwohl sie zum
+    # Lebenszeichen gehoeren. Regeln/07: "Zustaende retained, Messwerte mit
+    # Zeitbezug nicht, das Lebenszeichen nie" - zurueckbehalten zeigte es
+    # immer "lebt", auch fuer einen Dienst, der seit Tagen steht.
+    #
+    # Auf jeder bestehenden Anlage liegt der Altwert im Broker und bliebe
+    # dort, bis ihn jemand von Hand loescht. Er wird deshalb einmal mit
+    # LEERER Nutzlast und retain geloescht - so loescht ein Broker ein
+    # zurueckbehaltenes Thema (Regeln/07, an diesem Broker gemessen
+    # 14.09.2026). Danach geht sofort der gueltige Wert hinaus: das
+    # MQTT-Gateway reicht eine leere Nutzlast als leeren Wert an den
+    # Miniserver weiter.
+    ALTLAST = ("service/online", "timestamp")
+
     def __init__(self, praefix):
         self.praefix = praefix
         self.client = None
@@ -202,7 +216,13 @@ class Mqtt:
             client = mqtt.Client()      # paho-mqtt 1.x
         if zugang["user"]:
             client.username_pw_set(zugang["user"], zugang["pass"] or "")
-        client.will_set(self.praefix + "/service/online", "0", retain=True)
+        # Der Last Will ist Teil des Lebenszeichens und geht deshalb NICHT
+        # zurueckbehalten hinaus (Regeln/07, Hausstandard 03.09.2026,
+        # bekraeftigt 17.09.2026). Bis 1.2.9 stand hier retain=True: nach
+        # einem Verbindungsabriss blieb eine 0 fuer immer im Broker stehen,
+        # und ein Abnehmer, der sich Tage spaeter verband, bekam sie als
+        # aktuelle Aussage ueber einen laengst wieder laufenden Dienst.
+        client.will_set(self.praefix + "/service/online", "0", retain=False)
         try:
             client.connect(zugang["host"], zugang["port"], keepalive=60)
         except OSError as fehler:
@@ -216,8 +236,45 @@ class Mqtt:
         self.warte = self.WARTE_MIN
         log.info("MQTT verbunden mit %s:%s, Themenpraefix %s",
                  zugang["host"], zugang["port"], self.praefix)
+        self._altlast_raeumen()
         self.senden("service/online", "1")
         return True
+
+    def _altlast_raeumen(self):
+        """Die zurueckbehaltenen Altwerte des Lebenszeichens einmal loeschen.
+
+        Gilt fuer eine Anlage, die von 1.2.9 oder frueher kommt: dort stehen
+        <praefix>/service/online und <praefix>/timestamp zurueckbehalten im
+        Broker. Geloescht wird mit leerer Nutzlast und retain; der gueltige
+        Wert geht unmittelbar danach hinaus (der Aufrufer sendet
+        service/online, den Zeitstempel schickt der erste Durchgang).
+
+        Der Merker liegt im Datenordner. Der ueberlebt ein Upgrade nicht -
+        das ist hier kein Versehen: nach einem Upgrade zwei Nachrichten mehr
+        zu senden kostet nichts, und ein Praefix, das seit dem letzten Mal
+        gewechselt hat, wird dadurch mit abgeraeumt.
+        """
+        if not self.client or os.path.exists(gem.RETAIN_MERKER):
+            return
+        for unterthema in self.ALTLAST:
+            try:
+                self.client.publish(self.praefix + "/" + unterthema, "",
+                                    qos=0, retain=True)
+            except Exception as fehler:  # noqa: BLE001
+                log.error("Zurueckbehaltener Altwert %s nicht geloescht: %s",
+                          unterthema, fehler)
+                return
+        log.info("Zurueckbehaltene Altwerte des Lebenszeichens geloescht: %s",
+                 ", ".join(self.praefix + "/" + u for u in self.ALTLAST))
+        try:
+            if not os.path.isdir(os.path.dirname(gem.RETAIN_MERKER)):
+                os.makedirs(os.path.dirname(gem.RETAIN_MERKER))
+            with open(gem.RETAIN_MERKER, "w", encoding="utf-8") as fh:
+                fh.write("{0} {1}\n".format(int(time.time()), self.praefix))
+        except OSError as fehler:
+            log.warning("Merker %s nicht schreibbar (%s) - die Altwerte "
+                        "werden beim naechsten Start noch einmal geloescht.",
+                        gem.RETAIN_MERKER, fehler)
 
     def nachfassen(self):
         """Steht die Verbindung nicht, es spaeter noch einmal versuchen.
@@ -331,12 +388,89 @@ class Dienst:
         self.letzter_status = None
         self.erster_durchgang = True
         self.config_mtime = self._mtime()
+        # Beobachtet wird auch die Systemdatei mit den Brokerdaten. Bis
+        # 1.2.9 stand hier nur die eigene Konfiguration; ein Brokerwechsel
+        # in general.json wirkte deshalb erst, wenn jemand ausserdem die
+        # Plugin-Einstellungen speicherte (in WSL gemessen,
+        # Pruefung-APC-UPS-1.2.10, Fall general_live).
+        self.general_mtime = self._mtime_general()
         self._gemeldet = {}
         self._letzte_kappung = 0
+        # Womit die bestehende MQTT-Verbindung aufgebaut wurde; gesetzt in
+        # start(), verglichen nach jedem Neueinlesen.
+        self._mqtt_stand = None
+
+    def _mqtt_soll(self):
+        """Was eine MQTT-Verbindung festlegt: Schalter, Praefix, Zugang.
+
+        Der Zugang (Broker, Port, Benutzer, Kennwort) steht in general.json
+        von LoxBerry, nicht in der Konfiguration des Plugins. Seit 1.2.10
+        beobachtet der Dienst auch deren Aenderungszeit; bis dahin wurde er
+        nur mitgeprueft, wenn sich die Plugin-Konfiguration geaendert hatte,
+        und ein Brokerwechsel allein blieb bis zum naechsten Speichern ohne
+        Wirkung.
+        """
+        return (self.cfg.get("mqtt", "1") == "1",
+                self.cfg.get("themenpraefix") or "apcups",
+                gem.mqtt_zugangsdaten())
+
+    def _mqtt_nachziehen(self):
+        """Nach dem Neueinlesen die MQTT-Verbindung an die Konfiguration anpassen.
+
+        Bis 1.2.9 wurden Praefix und MQTT-Schalter nur beim Start gelesen.
+        In WSL gemessen (Pruefung-Upgradeluecke-2026-09-17, Befund B1): ein
+        Dienst, der mit der Vorgabe-Konfiguration gestartet war, las die
+        zurueckgespielte Konfiguration mit Praefix merkpraefix7 zwar ein,
+        sendete aber weiter 37 Werte in 25 s unter apcups - bis zum naechsten
+        Neustart. Ebenso blieb MQTT an, wenn mqtt=0 gespeichert wurde.
+
+        Getrennt wird wie beim Beenden des Dienstes (Mqtt.stop): service/online
+        geht unter dem ALTEN Praefix mit 0 hinaus, danach ein sauberes
+        disconnect - der Broker verwirft dabei den Last Will, er loest ihn
+        nicht aus. Unter dem neuen Praefix entsteht die Verbindung wie beim
+        Start. Das ist dasselbe, was Speichern in der Oberflaeche bisher ueber
+        den Neustart des Dienstes bewirkt hat.
+
+        Rueckgabe: True, wenn die Verbindung neu aufgebaut wurde.
+        """
+        soll = self._mqtt_soll()
+        if soll == self._mqtt_stand:
+            return False
+        alt_ein, alt_praefix, alt_zugang = self._mqtt_stand
+        ein, praefix, zugang = soll
+        # Das Kennwort steht im Zugang - protokolliert wird nur, OB er sich
+        # geaendert hat.
+        log.info("MQTT-Einstellungen geaendert (MQTT %s -> %s, Praefix %s -> %s, "
+                 "Zugang %s) - Verbindung wird neu aufgebaut",
+                 "ein" if alt_ein else "aus", "ein" if ein else "aus",
+                 alt_praefix, praefix,
+                 "geaendert" if zugang != alt_zugang else "unveraendert")
+        self.mqtt.stop()
+        self.praefix = praefix
+        self.mqtt = Mqtt(praefix)
+        self._mqtt_stand = soll
+        if ein:
+            self.mqtt.start()
+        else:
+            log.info("MQTT ist ausgeschaltet")
+        return True
 
     def _mtime(self):
         try:
             return os.path.getmtime(gem.CONFIG_FILE)
+        except OSError:
+            return 0
+
+    def _mtime_general(self):
+        """Aenderungszeit von config/system/general.json, 0 wenn es sie nicht gibt.
+
+        Eine fehlende Datei ist kein Fehler: dann gibt es keinen Broker, und
+        mqtt_zugangsdaten() liefert None. Gemessen wird die Zeit, nicht der
+        Inhalt - ob sich an MQTT wirklich etwas geaendert hat, entscheidet
+        _mqtt_nachziehen() am Vergleich von _mqtt_soll().
+        """
+        try:
+            return os.path.getmtime(gem.GENERAL_FILE)
         except OSError:
             return 0
 
@@ -533,7 +667,8 @@ class Dienst:
             log.warning("Das Plugin ist ausgeschaltet. Im Reiter Einstellungen "
                         "einschalten und speichern.")
 
-        if self.cfg.get("mqtt", "1") == "1":
+        self._mqtt_stand = self._mqtt_soll()
+        if self._mqtt_stand[0]:
             self.mqtt.start()
         else:
             log.info("MQTT ist ausgeschaltet")
@@ -558,14 +693,27 @@ class Dienst:
 
             self._kappen()
 
-            if self._mtime() != self.config_mtime:
-                log.info("Konfiguration geaendert - wird neu eingelesen")
-                self.config_mtime = self._mtime()
-                self.cfg, _ = gem.konfiguration_lesen()
-                self.letzter_stand.clear()
-                intervall = max(5, gem.zahl(self.cfg, "intervall", 30, int))
-                vollmeldung_alle = max(intervall,
-                                       gem.zahl(self.cfg, "aktualisierung", 300, int))
+            # Zwei Dateien, eine Entscheidung: die eigene Konfiguration und
+            # die Systemdatei mit den Brokerdaten. Die zweite wird nicht neu
+            # eingelesen (das tut mqtt_zugangsdaten() in _mqtt_soll()),
+            # sondern nur auf ihre Aenderungszeit angesehen.
+            cfg_zeit = self._mtime()
+            general_zeit = self._mtime_general()
+            if cfg_zeit != self.config_mtime or general_zeit != self.general_mtime:
+                if cfg_zeit != self.config_mtime:
+                    log.info("Konfiguration geaendert - wird neu eingelesen")
+                    self.config_mtime = cfg_zeit
+                    self.cfg, _ = gem.konfiguration_lesen()
+                    self.letzter_stand.clear()
+                    intervall = max(5, gem.zahl(self.cfg, "intervall", 30, int))
+                    vollmeldung_alle = max(intervall,
+                                           gem.zahl(self.cfg, "aktualisierung", 300, int))
+                if general_zeit != self.general_mtime:
+                    log.info("general.json geaendert - MQTT-Zugang wird nachgesehen")
+                    self.general_mtime = general_zeit
+                if self._mqtt_nachziehen():
+                    self.letzter_stand.clear()
+                    letzte_vollmeldung = 0
 
             ende = time.time() + intervall
             while self.laeuft and time.time() < ende:

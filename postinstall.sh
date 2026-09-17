@@ -3,6 +3,13 @@
 # To use important variables from command line use the following code:
 PSHNAME=$2    # Second argument is Plugin-Name for scipts etc.
 PDIR=$3       # Third argument is Plugin installation folder
+# Rueckfall, falls sudo die Umgebung ausgeraeumt hat (env_reset), wie in
+# preupgrade.sh und postupgrade.sh. Das fuenfte Argument ist das
+# Wurzelverzeichnis. Ohne den Rueckfall zeigte PLOG auf /<ordner>: in WSL
+# mit geleerter Umgebung gemessen (Pruefung-APC-UPS-1.2.10, Fall n5), die
+# Protokolldatei entstand nicht, und chmod traf keine Datei.
+LBPLOG="${LBPLOG:-$5/log/plugins}"
+LBPBIN="${LBPBIN:-$5/bin/plugins}"
 #LBHOMEDIR=$5 # Comes from /etc/environment now.
 
 PLOG=$LBPLOG/$PDIR

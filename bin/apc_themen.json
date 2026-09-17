@@ -22,9 +22,15 @@
     "retain:  true nur fuer Zustaende, die auch ohne neue Nachricht gelten.",
     "         Fuer Messwerte schaedlich: ein Abnehmer, der sich nach einer",
     "         Stunde neu verbindet, bekaeme eine stundenalte Restlaufzeit",
-    "         serviert und hielte sie fuer aktuell."
+    "         serviert und hielte sie fuer aktuell.",
+    "         Das LEBENSZEICHEN ist nie retained (service/online und",
+    "         timestamp, seit Fassung 3 der Liste; dazu der Last Will, der",
+    "         Teil des Lebenszeichens ist). Zurueckbehalten sagte es immer",
+    "         'lebt' - auch fuer einen Dienst, der seit Tagen steht. Wie",
+    "         frisch ein Wert ist, beantwortet timestamp, und der muss",
+    "         dafuer selbst frisch sein."
   ],
-  "fassung": 2,
+  "fassung": 3,
   "themen": [
     { "schluessel": "status",                "art": "text",    "einheit": "",    "min": null, "max": null,       "retain": true  },
     { "schluessel": "data_valid",            "art": "digital", "einheit": "",    "min": 0,    "max": 1,          "retain": true  },
@@ -59,9 +65,9 @@
     { "schluessel": "model",                 "art": "text",    "einheit": "",    "min": null, "max": null,       "retain": true  },
     { "schluessel": "serial",                "art": "text",    "einheit": "",    "min": null, "max": null,       "retain": true  },
     { "schluessel": "battery_date",          "art": "text",    "einheit": "",    "min": null, "max": null,       "retain": true  },
-    { "schluessel": "timestamp",             "art": "analog",  "einheit": "s",   "min": 0,    "max": 4102444800, "retain": true  },
+    { "schluessel": "timestamp",             "art": "analog",  "einheit": "s",   "min": 0,    "max": 4102444800, "retain": false },
     { "schluessel": "valid",                 "art": "digital", "einheit": "",    "min": 0,    "max": 1,          "retain": true  },
-    { "schluessel": "service/online",        "art": "digital", "einheit": "",    "min": 0,    "max": 1,          "retain": true  },
+    { "schluessel": "service/online",        "art": "digital", "einheit": "",    "min": 0,    "max": 1,          "retain": false },
     { "schluessel": "event",                 "art": "text",    "einheit": "",    "min": null, "max": null,       "retain": true  },
     { "schluessel": "last_error",            "art": "text",    "einheit": "",    "min": null, "max": null,       "retain": false }
   ]

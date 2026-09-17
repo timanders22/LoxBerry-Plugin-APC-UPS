@@ -24,6 +24,37 @@
 # daneben, und der Waechter lauft dann ins Leere, ohne es zu sagen.
 DIENST="REPLACELBPBINDIR/apc_service.py"
 
+# Laeuft gerade eine Aktualisierung, startet der Waechter nichts. Die Marke
+# legt preupgrade.sh neben den Datenordner, postupgrade.sh entfernt sie und
+# startet den Dienst selbst. Ohne sie startete der Takt in der Luecke
+# zwischen neuer Cron-Datei und postinstall.sh einen Dienst mit der
+# Vorgabe-Konfiguration (in WSL gemessen, Pruefung-Upgradeluecke-2026-09-17).
+# Gilt nur, solange sie juenger als eine Stunde ist: eine abgebrochene
+# Installation darf den Waechter nicht fuer immer stilllegen. Eine
+# unlesbare Marke gilt nicht.
+MARKE="REPLACELBPDATADIR.upgrade_laeuft"
+if [ -f "$MARKE" ]; then
+    SEIT=$(cat "$MARKE" 2>/dev/null)
+    case "$SEIT" in ""|*[!0-9]*) SEIT=0 ;; esac
+    ALTER=$(( $(date +%s) - SEIT ))
+    if [ "$ALTER" -ge 0 ] && [ "$ALTER" -lt 3600 ]; then
+        exit 0
+    fi
+fi
+
+# Ist PID ein Dienst dieses Plugins? Argumentweise (Regeln/03): argv[0] ein
+# Python, argv[1] genau das Skript. Ein Editor mit der Datei offen wird so
+# nie fuer den Dienst gehalten.
+apc_ist_dienst() {
+    [ -r "/proc/$1/cmdline" ] || return 1
+    tr '\0' '\n' 2>/dev/null < "/proc/$1/cmdline" | {
+        IFS= read -r a0 || exit 1
+        IFS= read -r a1 || exit 1
+        case "${a0##*/}" in python|python3|python3.*) ;; *) exit 1 ;; esac
+        [ "$a1" = "$2" ]
+    }
+}
+
 # Ist das Plugin ausgeschaltet, hat der Waechter nichts zu tun. Sonst
 # startete er einen Dienst, den der Anwender bewusst angehalten hat - und
 # ein Waechter, der gegen den Willen des Anwenders arbeitet, ist schlimmer
@@ -49,11 +80,37 @@ PIDF=/run/shm/apc_ups_ng.pid
 [ -f "$PIDF" ] || PIDF="REPLACELBPLOGDIR/apc_ups_ng.pid"
 if [ -f "$PIDF" ]; then
     P=$(cat "$PIDF" 2>/dev/null)
-    if [ -n "$P" ] && kill -0 "$P" 2>/dev/null \
-       && grep -qa "apc_service.py" "/proc/$P/cmdline" 2>/dev/null; then
+    if [ -n "$P" ] && kill -0 "$P" 2>/dev/null && apc_ist_dienst "$P" "$DIENST"; then
         exit 0
     fi
 fi
+
+# Keine gueltige PID-Datei - laeuft trotzdem einer? Ohne diese Frage
+# startete der Waechter neben einem Dienst, dessen PID-Datei fehlt, einen
+# zweiten: die Dateisperre des Dienstes haengt an der Datei, und eine neu
+# angelegte Datei ist nicht mehr gesperrt. In WSL gemessen
+# (Pruefung-Upgradeluecke-2026-09-17, Befund B5): zwei Dienste. Gesucht wird
+# nur Python mit genau diesem Skript, nur beim Benutzer des Dienstes.
+# Beendet wird hier nichts: ein eben gestarteter Dienst hat seine PID-Datei
+# vielleicht noch nicht geschrieben. Deshalb erst drei Sekunden warten und
+# nur melden, wenn die Datei dann noch fehlt.
+WER_UID=$(id -u loxberry 2>/dev/null || id -u)
+for d in /proc/[0-9]*; do
+    [ "$(stat -c %u "$d" 2>/dev/null)" = "$WER_UID" ] || continue
+    if apc_ist_dienst "${d#/proc/}" "$DIENST"; then
+        WAISE=${d#/proc/}
+        sleep 3
+        PIDF=/run/shm/apc_ups_ng.pid
+        [ -f "$PIDF" ] || PIDF="REPLACELBPLOGDIR/apc_ups_ng.pid"
+        P=$(cat "$PIDF" 2>/dev/null)
+        if [ -n "$P" ] && kill -0 "$P" 2>/dev/null && apc_ist_dienst "$P" "$DIENST"; then
+            exit 0
+        fi
+        MELDUNG="APC-UPS NG: der Dienst laeuft ohne PID-Datei (PID $WAISE) - es wird kein zweiter gestartet. Beendet wird er durch ein Update, die Deinstallation oder einen Neustart des Rechners."
+        command -v logger >/dev/null 2>&1 && logger -t apc_ups_ng "$MELDUNG"
+        exit 0
+    fi
+done
 
 # Er laeuft nicht. Nachstarten - als loxberry, nicht als root: der Dienst
 # fragt nur den laufenden apcupsd ueber das Netz ab und braucht keine
@@ -106,8 +163,7 @@ sleep 3
 PIDF=/run/shm/apc_ups_ng.pid
 [ -f "$PIDF" ] || PIDF="REPLACELBPLOGDIR/apc_ups_ng.pid"
 NEU=$(cat "$PIDF" 2>/dev/null)
-if [ -n "$NEU" ] && kill -0 "$NEU" 2>/dev/null \
-   && grep -qa "apc_service.py" "/proc/$NEU/cmdline" 2>/dev/null; then
+if [ -n "$NEU" ] && kill -0 "$NEU" 2>/dev/null && apc_ist_dienst "$NEU" "$DIENST"; then
     command -v logger >/dev/null 2>&1 && logger -t apc_ups_ng "$MELDUNG (PID $NEU)"
     exit 0
 fi

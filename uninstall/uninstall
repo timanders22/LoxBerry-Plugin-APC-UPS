@@ -8,34 +8,78 @@
 # (/run/shm/apc_ups_ng.pid) im Normalfall zutrifft: apc_service.py legt die
 # PID-Datei dort ab, solange /run/shm existiert. Nur wenn es das NICHT tut -
 # und genau dafuer war der zweite Pfad gedacht -, lief das Beenden ins Leere.
-PDIR="${3:-apc-ups}"
+PDIR="${3:-apc_ups_ng}"
 BASE="${5:-$LBHOMEDIR}"
 LOGDIR="${LBPLOG:-$BASE/log/plugins}"
+
+# Ist PID ein Dienst dieses Plugins? Argumentweise (Regeln/03): argv[0] ein
+# Python, argv[1] genau das Skript - nicht nur der Dateiname, sonst traefe
+# es auch einen Editor mit der Datei offen.
+DIENST="$BASE/bin/plugins/$PDIR/apc_service.py"
+apc_ist_dienst() {
+    [ -r "/proc/$1/cmdline" ] || return 1
+    tr '\0' '\n' 2>/dev/null < "/proc/$1/cmdline" | {
+        IFS= read -r a0 || exit 1
+        IFS= read -r a1 || exit 1
+        case "${a0##*/}" in python|python3|python3.*) ;; *) exit 1 ;; esac
+        [ "$a1" = "$2" ]
+    }
+}
+apc_dienste_suchen() {
+    for d in /proc/[0-9]*; do
+        [ "$(stat -c %u "$d" 2>/dev/null)" = "$2" ] || continue
+        apc_ist_dienst "${d#/proc/}" "$1" && echo "${d#/proc/}"
+    done
+    return 0
+}
 
 # Dienst punktgenau ueber die PID-Datei beenden, nicht ueber pkill -f:
 # das haette jeden Prozess getroffen, in dessen Befehlszeile der Dateiname
 # vorkommt - auch einen offenen Editor.
+#
+# Argumentweise gegengeprueft wird VOR dem ersten Signal. Bis 1.2.10 war nur
+# das SIGKILL abgesichert, das SIGTERM davor nicht - und Prozessnummern
+# werden wiederverwendet. In WSL gemessen (Pruefung-APC-UPS-1.2.10, Fall
+# fremd_pid): ein fremder Vorgang, dessen Nummer in der PID-Datei stand, war
+# nach der Deinstallation tot. Ein kill an den Falschen ist nicht
+# rueckgaengig zu machen.
 for PIDF in /run/shm/apc_ups_ng.pid "$LOGDIR/$PDIR/apc_ups_ng.pid"; do
     [ -f "$PIDF" ] || continue
     P=$(cat "$PIDF" 2>/dev/null)
-    if [ -n "$P" ] && kill -0 "$P" 2>/dev/null; then
+    if [ -n "$P" ] && kill -0 "$P" 2>/dev/null && apc_ist_dienst "$P" "$DIENST"; then
         kill "$P" 2>/dev/null
         i=0
         while [ $i -lt 10 ] && kill -0 "$P" 2>/dev/null; do
             sleep 1
             i=$((i + 1))
         done
-        # Vor dem harten Beenden argumentweise gegenpruefen, nicht als
-        # Teilzeichenkette: Prozessnummern werden wiederverwendet, und ein
-        # kill -9 an den Falschen ist nicht rueckgaengig zu machen.
-        if kill -0 "$P" 2>/dev/null \
-           && tr '\0' '\n' < "/proc/$P/cmdline" 2>/dev/null \
-              | sed 's#.*/##' | grep -qx "apc_service.py"; then
+        if kill -0 "$P" 2>/dev/null && apc_ist_dienst "$P" "$DIENST"; then
             kill -9 "$P" 2>/dev/null
         fi
+    elif [ -n "$P" ] && kill -0 "$P" 2>/dev/null; then
+        echo "<INFO> Die Nummer $P aus $PIDF gehoert einem fremden Vorgang -"
+        echo "<INFO> es wurde nichts beendet, die Datei wird entfernt."
     fi
     rm -f "$PIDF"
 done
+
+# Dazu jeder eigene Dienst OHNE PID-Datei - der liefe sonst nach der
+# Deinstallation weiter und sendete nach MQTT. In WSL gemessen
+# (Pruefung-APC-UPS-1.2.10, Fall uninstall). Nur Python mit genau diesem
+# Skript, nur beim Benutzer des Dienstes (loxberry).
+APC_UID=$(id -u loxberry 2>/dev/null || id -u)
+WAISEN=$(apc_dienste_suchen "$DIENST" "$APC_UID")
+if [ -n "$WAISEN" ]; then
+    kill $WAISEN 2>/dev/null
+    i=0
+    while [ $i -lt 10 ] && [ -n "$(apc_dienste_suchen "$DIENST" "$APC_UID")" ]; do
+        sleep 1
+        i=$((i + 1))
+    done
+    REST=$(apc_dienste_suchen "$DIENST" "$APC_UID")
+    [ -n "$REST" ] && kill -9 $REST 2>/dev/null
+    echo "<INFO> Ein Dienst ohne PID-Datei lief und wurde beendet (PID $(echo $WAISEN))."
+fi
 rm -f /run/shm/apc_ups_ng_status.json /tmp/apc_ups_ng_status.json
 
 # apcupsd wird bewusst NICHT entfernt. Die Originalfassung rief hier
@@ -55,5 +99,44 @@ UN_FOLDER="${3:-}"
 UN_BASE="${5:-$LBHOMEDIR}"
 if [ -n "$UN_FOLDER" ] && [ -n "$UN_BASE" ] && [ -d "$UN_BASE/data/plugins" ]; then
     rm -rf "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" 2>/dev/null
+    # Die Marke "Aktualisierung laeuft" aus preupgrade.sh. Bliebe sie nach
+    # einem abgebrochenen Upgrade liegen, sperrte sie den Waechter einer
+    # Neuinstallation bis zu einer Stunde.
+    rm -f "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_laeuft" 2>/dev/null
+fi
+
+# ---------- Die Zweitschrift neben dem Konfigordner wegraeumen ----------
+# preupgrade.sh legt config/plugins/<ordner>.backup.apc_ups_ng.cfg an. Die
+# Datei liegt NEBEN dem Ordner, den LoxBerry beim Deinstallieren loescht,
+# und bliebe deshalb liegen - mit dem Formulartoken darin.
+# Regeln/06, Abschnitt "Deinstallation": "Es gibt ein Sicherungsverfahren,
+# nicht zwei; jede Zweitschrift, die entsteht, steht in uninstall."
+# In WSL gemessen (Pruefung-APC-UPS-1.2.10, Fall uninstall): bis 1.2.10 lag
+# sie nach der Deinstallation noch da.
+#
+# Vor dem Loeschen ueberschrieben. Das ist auf Speicherkarte und eMMC KEIN
+# sicheres Loeschen (der Flash-Controller entscheidet, wohin geschrieben
+# wird; Regeln/06) - es ist der Unterschied zwischen "steht noch da" und
+# "muss man suchen". Gemeldet wird erst, nachdem nachgesehen wurde.
+UN_ZWEIT="$UN_BASE/config/plugins/$UN_FOLDER.backup.apc_ups_ng.cfg"
+UN_HATTE=0
+if [ -n "$UN_FOLDER" ] && [ -n "$UN_BASE" ] && [ -f "$UN_ZWEIT" ]; then
+    UN_HATTE=1
+    dd if=/dev/zero of="$UN_ZWEIT" bs=1 count="$(wc -c < "$UN_ZWEIT")" \
+        conv=notrunc >/dev/null 2>&1
+    rm -f "$UN_ZWEIT" 2>/dev/null
+fi
+# Gemeldet wird nur, was wirklich geschehen ist, und erst nach dem
+# Nachsehen. Ein "ist entfernt" ohne vorgefundene Datei behauptete eine
+# Handlung, die es nicht gab - dieselbe Klasse wie die Erfolgsmeldung eines
+# gescheiterten sed (Regeln/06, "Ein Hakenskript meldet nur, was es
+# nachgelesen hat").
+if [ "$UN_HATTE" = "1" ]; then
+    if [ -e "$UN_ZWEIT" ]; then
+        echo "<WARNING> Die Zweitschrift $UN_ZWEIT liess sich nicht entfernen."
+        echo "<WARNING> Sie traegt den Formulartoken - bitte von Hand loeschen."
+    else
+        echo "<OK> Die Zweitschrift der Einstellungen ist entfernt."
+    fi
 fi
 exit 0
