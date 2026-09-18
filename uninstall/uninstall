@@ -99,6 +99,10 @@ UN_FOLDER="${3:-}"
 UN_BASE="${5:-$LBHOMEDIR}"
 if [ -n "$UN_FOLDER" ] && [ -n "$UN_BASE" ] && [ -d "$UN_BASE/data/plugins" ]; then
     rm -rf "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" 2>/dev/null
+    # Zwischenstaende aus preupgrade.sh (neu bauen, dann umbenennen);
+    # sie bleiben nur liegen, wenn ein Lauf mittendrin endete.
+    rm -rf "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung.neu" \
+           "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung.alt" 2>/dev/null
     # Die Marke "Aktualisierung laeuft" aus preupgrade.sh. Bliebe sie nach
     # einem abgebrochenen Upgrade liegen, sperrte sie den Waechter einer
     # Neuinstallation bis zu einer Stunde.
@@ -125,6 +129,13 @@ if [ -n "$UN_FOLDER" ] && [ -n "$UN_BASE" ] && [ -f "$UN_ZWEIT" ]; then
     dd if=/dev/zero of="$UN_ZWEIT" bs=1 count="$(wc -c < "$UN_ZWEIT")" \
         conv=notrunc >/dev/null 2>&1
     rm -f "$UN_ZWEIT" 2>/dev/null
+fi
+# Der Zwischenstand aus preupgrade.sh (daneben schreiben, dann umbenennen)
+# traegt denselben Inhalt; er bleibt nur nach einem abgebrochenen Lauf.
+if [ -n "$UN_FOLDER" ] && [ -n "$UN_BASE" ] && [ -f "$UN_ZWEIT.neu" ]; then
+    dd if=/dev/zero of="$UN_ZWEIT.neu" bs=1 count="$(wc -c < "$UN_ZWEIT.neu")" \
+        conv=notrunc >/dev/null 2>&1
+    rm -f "$UN_ZWEIT.neu" 2>/dev/null
 fi
 # Gemeldet wird nur, was wirklich geschehen ist, und erst nach dem
 # Nachsehen. Ein "ist entfernt" ohne vorgefundene Datei behauptete eine

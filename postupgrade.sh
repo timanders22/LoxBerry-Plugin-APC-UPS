@@ -24,11 +24,28 @@ echo "<INFO> Copy back existing config files"
 # Die Sicherung liegt seit dem 10.08.2026 unter data/ statt unter /tmp: /tmp
 # ist auf dem LoxBerry eine Ramdisk und ausserdem fuer jeden lesbar.
 SICHER="$LBPDATA/$PDIR.upgrade_sicherung"
+# Die Sicherung faellt erst, wenn jede ihrer Dateien byteweise in der
+# Konfiguration steht. Bis 1.2.11 wurde der Rueckgabewert von cp nicht
+# gelesen, die Sicherung danach ohne Bedingung geloescht und der Erfolg
+# unbedingt gemeldet. In WSL gemessen (Pruefung-APC-UPS-1.2.12, Fall F7,
+# Schreiben scheitert unter "ulimit -f 0"): die Sicherung war weg, die
+# Konfiguration stand auf der Vorgabe, und das Protokoll meldete
+# "<OK> Konfiguration zurueckgestellt."
 if [ -d "$SICHER" ]; then
-    cp -p -r "$SICHER/." "$PCONFIG/" 2>/dev/null
+    if cp -p -r "$SICHER/." "$PCONFIG/" 2>/dev/null; then CP_RC=0; else CP_RC=$?; fi
     chown -R loxberry:loxberry "$PCONFIG" 2>/dev/null
-    rm -rf "$SICHER"
-    echo "<OK> Konfiguration zurueckgestellt."
+    FEHLT=$( { cd "$SICHER" && find . -type f | while IFS= read -r f; do
+                 cmp -s "$f" "$PCONFIG/$f" || printf '%s ' "${f#./}"
+             done; } 2>/dev/null || echo "(Sicherung nicht lesbar)" )
+    if [ "$CP_RC" -eq 0 ] && [ -z "$FEHLT" ]; then
+        rm -rf "$SICHER"
+        echo "<OK> Konfiguration zurueckgestellt."
+    else
+        echo "<WARNING> Die Konfiguration liess sich NICHT vollstaendig zurueckstellen"
+        echo "<WARNING> (cp Rueckgabewert $CP_RC; abweichend: ${FEHLT:-keine})."
+        echo "<WARNING> Die Sicherung bleibt liegen und kann von Hand zurueckkopiert"
+        echo "<WARNING> werden: $SICHER -> $PCONFIG"
+    fi
 else
     echo "<INFO> Keine Sicherung vorhanden - offenbar eine Erstinstallation."
 fi

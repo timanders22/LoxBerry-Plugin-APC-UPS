@@ -4,6 +4,51 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.12
+
+**Die Sicherung wurde gelöscht, bevor die neue stand.** `preupgrade.sh`
+räumte `data/plugins/<ordner>.upgrade_sicherung` mit `rm -rf` ab und
+kopierte erst danach die Konfiguration hinein. Brach ein Upgrade nach dem
+Abräumen durch den Installer (`purge_installation`) ab und wurde es erneut
+angestoßen, war diese Sicherung aber die einzige Abschrift der Einstellungen:
+der zweite Lauf löschte sie und legte einen leeren Ordner an. Dasselbe, wenn
+das Kopieren scheiterte (volle Karte). Jetzt wird die neue Sicherung daneben
+gebaut, Datei für Datei gegen die Konfiguration verglichen, und erst dann
+tritt sie an die Stelle der alten. Eine Sicherung, die aus einem nicht
+abgeschlossenen Upgrade liegengeblieben ist, wird nur von einer ersetzt, die
+selbst vollständige Einstellungen trägt — hatte der Installer vor dem Abbruch
+schon die mitgelieferte Vorgabe kopiert, bleibt die ältere, bessere liegen.
+
+**Die Zweitschrift wurde nach Größe beurteilt.** Ob die Zweitschrift
+`config/plugins/<ordner>.backup.apc_ups_ng.cfg` erneuert wird, entschied
+bisher allein „die Datei ist nicht leer". Eine abgeschnittene
+Konfiguration ist nicht leer — sie verdrängte die heile Zweitschrift.
+Entschieden wird jetzt nach Inhalt: der Kopf `[apc_ups_ng]` und ein
+vollständiger Formulartoken, den die Oberfläche als letzte Zeile schreibt.
+Die Zweitschrift wird daneben geschrieben und dann umbenannt; ein direktes
+`cp` kappte sie zuerst und ließ sie leer zurück, wenn das Schreiben
+scheiterte. Die Meldung „Zweitschrift der Einstellungen angelegt." kommt nur
+noch, wenn das nachgesehen ist — bisher kam sie immer, auch ohne
+Konfiguration.
+
+**Das Zurückspielen löschte die Sicherung auch, wenn es scheiterte.**
+`postupgrade.sh` las den Rückgabewert von `cp` nicht, löschte die Sicherung
+danach ohne Bedingung und meldete „Konfiguration zurueckgestellt.". Jetzt
+fällt die Sicherung erst, wenn jede ihrer Dateien byteweise in der
+Konfiguration steht; sonst bleibt sie liegen, und das Protokoll sagt, wo.
+`uninstall` räumt die neuen Zwischenstände (`….neu`, `….alt`) mit ab.
+
+Gemessen in WSL, nicht am Gerät: `Pruefung-APC-UPS-1.2.12/` (elf Fälle, 38
+Prüfzeilen; vor der Änderung 13 rot, davon 10 Befunde des alten Stands und
+3 Gegenproben für die neuen Namen, danach 0), jede Korrektur einzeln
+zurückgebaut und an ihrer Zeile rot (8 von 8). Anlass: die
+Bestandsmessungen vom 18.09.2026 (`Bestand-2026-09-18/`, Klassen C und D).
+
+Nicht geändert: steht die Konfiguration schon **vor** dem Upgrade
+abgeschnitten da, bleibt sie es auch danach — `postupgrade.sh` spielt die
+Sicherung zurück, und die trägt denselben Stand. Die heile Zweitschrift
+bleibt jetzt aber erhalten und kann von Hand zurückkopiert werden.
+
 ## Neu in 1.2.11
 
 **Das Startskript startete blind.** `daemon/daemon` läuft beim Systemstart als
