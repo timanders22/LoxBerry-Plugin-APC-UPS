@@ -16,6 +16,9 @@ pluginname=REPLACELBPPLUGINDIR
 pluginbindir=REPLACELBPBINDIR
 logdir=REPLACELBPLOGDIR
 log=$logdir/apc_ups_ng.log
+cfgdatei=REPLACELBPCONFIGDIR/apc_ups_ng.cfg
+marke=REPLACELBPDATADIR.upgrade_laeuft
+dienst=$pluginbindir/apc_service.py
 
 if [ -x /usr/bin/logger ]; then
     /usr/bin/logger "loxberry-plugin-$pluginname - Starte APC-UPS NG"
@@ -23,10 +26,116 @@ fi
 
 mkdir -p "$logdir" 2>/dev/null
 
+# Nur in eine SCHON VORHANDENE Protokolldatei schreiben. Diese Datei laeuft
+# beim Systemstart als root; eine hier neu angelegte Datei gehoerte root, und
+# der Dienst laeuft als loxberry und koennte sie danach nicht mehr
+# beschreiben. Angelegt und uebergeben wird sie von postinstall.sh
+# ("touch", dann "chown loxberry:loxberry"). Der Systemlogger bekommt die
+# Meldung in jedem Fall.
+apc_melden() {
+    if [ -x /usr/bin/logger ]; then
+        /usr/bin/logger "loxberry-plugin-$pluginname - $1"
+    fi
+    if [ -f "$log" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') INFO    daemon: $1" >> "$log" 2>/dev/null
+    fi
+}
+
 # apcupsd selbst starten, falls es nicht laeuft. Ohne ihn antwortet
 # apcaccess nicht.
+#
+# Das steht bewusst VOR den drei Fragen und bleibt damit unbedingt: apcupsd
+# ist der Systemdienst, nicht der Dienst dieses Plugins. Wer ihn bei
+# enabled=0 nicht mehr anstiesse, aenderte mehr als den gemessenen Befund.
+# Das ist die Entscheidung, die Aenderung eng zu fassen (CLAUDE.md §7),
+# keine Messung.
 if command -v systemctl >/dev/null 2>&1; then
     systemctl is-active --quiet apcupsd || systemctl start apcupsd 2>/dev/null
+fi
+
+# ---------- Prozesse dieses Plugins finden ----------
+# Argumentweise (Regeln/03), wortgleich mit cron/cron.05min, preupgrade.sh
+# und postupgrade.sh dieser Linie: argv[0] ist ein Python, argv[1] genau
+# dieses Skript, und der Prozess gehoert dem Benutzer des Dienstes. Ein
+# Editor mit der Datei offen, eine Suche mit dem Pfad im Muster und der
+# gleichnamige Dienst eines anderen Baums werden so nie fuer den Dienst
+# gehalten - "pgrep -f apc_service.py" traf jede Befehlszeile, in der die
+# Zeichenkette irgendwo vorkam.
+apc_ist_dienst() {
+    [ -r "/proc/$1/cmdline" ] || return 1
+    tr '\0' '\n' 2>/dev/null < "/proc/$1/cmdline" | {
+        IFS= read -r a0 || exit 1
+        IFS= read -r a1 || exit 1
+        case "${a0##*/}" in python|python3|python3.*) ;; *) exit 1 ;; esac
+        [ "$a1" = "$2" ]
+    }
+}
+apc_dienste_suchen() {
+    for d in /proc/[0-9]*; do
+        [ "$(stat -c %u "$d" 2>/dev/null)" = "$2" ] || continue
+        apc_ist_dienst "${d#/proc/}" "$1" && echo "${d#/proc/}"
+    done
+    return 0
+}
+
+# ---------- Drei Fragen vor dem Start ----------
+# Bis 1.2.10 startete diese Datei bedingungslos. In WSL gemessen
+# (18.09.2026, Bestand-2026-09-18/klasse-G, Faelle G1/G2/G3): bei enabled=0
+# lief der Dienst nach jedem Neustart wieder (1 Prozess statt 0); neben
+# einem laufenden Dienst legte ein zweiter Aufruf einen zweiten an (2 statt
+# 1); und eine frische Upgrade-Marke, die dieselbe Linie seit 1.2.10 selbst
+# fuehrt, wurde nicht beachtet (1 statt 0). Die drei Fragen sind dieselben
+# wie im Waechter cron/cron.05min; Bauart nach Chromecast4lox 1.3.11.
+
+# 1. Ist das Plugin ausgeschaltet, wird nichts gestartet. Der Knopf
+#    "Dienst anhalten" im Reiter Test setzt enabled=0; ein Start dagegen
+#    waere das Gegenteil dessen, was der Anwender eingestellt hat
+#    (CLAUDE.md §4: bewusst angehalten bleibt angehalten).
+if [ -f "$cfgdatei" ] && grep -q '^enabled=0' "$cfgdatei"; then
+    apc_melden "Start uebersprungen: enabled=0 - der Dienst ist bewusst angehalten."
+    exit 0
+fi
+
+# 2. Laeuft gerade eine Aktualisierung? preupgrade.sh legt die Marke neben
+#    den Datenordner, postupgrade.sh entfernt sie und startet danach selbst
+#    ueber den Waechter - dieser Weg laeuft NICHT ueber diese Datei
+#    (gemessen 18.09.2026, Fall nach_installation: 0 Aufrufe). Eine Ausnahme
+#    wie CC_START_TROTZ_MARKE bei Chromecast4lox 1.3.11 wird deshalb hier
+#    nicht gebraucht.
+#    Nur eine Marke zaehlt, die hoechstens eine Stunde alt ist: eine
+#    abgebrochene Installation darf den Dienst nicht fuer immer stilllegen.
+#    Aelter, aus der Zukunft oder unlesbar - sie gilt nicht.
+if [ -f "$marke" ]; then
+    seit=$(cat "$marke" 2>/dev/null)
+    case "$seit" in ''|*[!0-9]*) seit=0 ;; esac
+    # Die Uhr wird gemessen, nicht angenommen: liefert "date" nichts - unter
+    # Last kann ein fork scheitern -, rechnete die Schale mit einer leeren
+    # Zeichenkette, das Alter wuerde negativ, die Bedingung fiele durch, und
+    # der Dienst startete mitten in der Aktualisierung. Ein Schutz faellt
+    # geschlossen aus (CLAUDE.md §4): ohne Uhr gilt die Marke. Dieselbe
+    # Stelle steht in cron/cron.05min.
+    jetzt=$(date +%s 2>/dev/null)
+    case "$jetzt" in ''|*[!0-9]*) jetzt="" ;; esac
+    if [ -z "$jetzt" ]; then
+        apc_melden "Start uebersprungen: eine Aktualisierung laeuft (Uhrzeit nicht lesbar)."
+        exit 0
+    fi
+    alter=$(( jetzt - seit ))
+    if [ "$alter" -ge 0 ] && [ "$alter" -lt 3600 ]; then
+        apc_melden "Start uebersprungen: eine Aktualisierung dieses Plugins laeuft."
+        exit 0
+    fi
+fi
+
+# 3. Laeuft schon einer? Argumentweise, nicht ueber die PID-Datei allein -
+#    die loescht purge_installation beim Upgrade mit dem Datenordner, und
+#    die Dateisperre des Dienstes haengt an der Datei: eine neu angelegte
+#    ist nicht mehr gesperrt, ein zweiter Dienst kaeme also durch.
+apc_uid=$(id -u loxberry 2>/dev/null || id -u)
+apc_laeuft=$(apc_dienste_suchen "$dienst" "$apc_uid")
+if [ -n "$apc_laeuft" ]; then
+    apc_melden "Start uebersprungen: der Dienst laeuft bereits (PID $(echo $apc_laeuft | head -1))."
+    exit 0
 fi
 
 # Der Ueberwachungsdienst braucht keine Rootrechte - apcaccess fragt den

@@ -36,7 +36,21 @@ MARKE="REPLACELBPDATADIR.upgrade_laeuft"
 if [ -f "$MARKE" ]; then
     SEIT=$(cat "$MARKE" 2>/dev/null)
     case "$SEIT" in ""|*[!0-9]*) SEIT=0 ;; esac
-    ALTER=$(( $(date +%s) - SEIT ))
+    # Die Uhr wird gemessen, nicht angenommen. Bis 1.2.10 stand hier
+    # ALTER aus einer Kommandoersetzung mit date DIREKT in der Rechnung:
+    # liefert "date" nichts - unter Last kann ein fork scheitern -, rechnet
+    # die Schale mit einer leeren Zeichenkette, das Alter wird negativ, die
+    # Bedingung faellt durch, und der Waechter startet mitten in der
+    # Aktualisierung. In WSL gemessen (18.09.2026, Fall waechter_g3o, date
+    # als stumme Attrappe): 1 Prozess statt 0. Ein Schutz faellt geschlossen
+    # aus (CLAUDE.md §4) - ohne Uhr gilt die Marke. Dieselbe Stelle steht in
+    # daemon/daemon.
+    JETZT=$(date +%s 2>/dev/null)
+    case "$JETZT" in ""|*[!0-9]*) JETZT="" ;; esac
+    if [ -z "$JETZT" ]; then
+        exit 0
+    fi
+    ALTER=$(( JETZT - SEIT ))
     if [ "$ALTER" -ge 0 ] && [ "$ALTER" -lt 3600 ]; then
         exit 0
     fi

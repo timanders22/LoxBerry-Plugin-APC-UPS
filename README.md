@@ -4,6 +4,54 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.11
+
+**Das Startskript startete blind.** `daemon/daemon` läuft beim Systemstart als
+`root` und startete den Dienst bis 1.2.10 bedingungslos — ohne eine der drei
+Fragen zu stellen, die der Wächter `cron/cron.05min` derselben Fassung längst
+stellte. In WSL gemessen (18.09.2026, Prozesse argumentweise über `/proc`
+gezählt):
+
+| Lage | vorher | jetzt |
+|---|---|---|
+| `enabled=0` — der Dienst ist im Reiter Test bewusst angehalten | 1 Prozess | 0 |
+| Ein Dienst läuft bereits, das Skript wird erneut aufgerufen | 2 Prozesse | 1 (derselbe) |
+| Eine frische Upgrade-Marke liegt (eine Aktualisierung läuft) | 1 Prozess | 0 |
+
+Damit lief ein angehaltener Dienst nach jedem Neustart des Rechners wieder,
+und in der Lücke einer Aktualisierung konnte ein zweiter Dienst neben dem
+ersten entstehen. Die Marke führt diese Fassung seit 1.2.10 selbst; nur das
+Startskript beachtete sie nicht.
+
+Die drei Fragen sind jetzt wortgleich mit denen des Wächters. Ein laufender
+Dienst wird **argumentweise** erkannt (`argv[0]` ein Python, `argv[1]` genau
+das Dienstskript, und der Prozess gehört dem Benutzer des Dienstes) — ein
+Editor mit der Datei offen oder ein gleichnamiger Dienst aus einem anderen
+Baum wird nie dafür gehalten. Die Marke gilt nur, solange sie höchstens eine
+Stunde alt ist; älter, aus der Zukunft oder unlesbar gilt sie nicht, damit
+eine abgebrochene Installation den Dienst nicht für immer stilllegt.
+
+**Ohne lesbare Uhr fällt die Markenprüfung geschlossen aus.** Liefert `date`
+nichts — unter Last kann ein `fork` scheitern —, rechnete der Wächter mit
+einer leeren Zeichenkette; das Alter wurde negativ, die Bedingung fiel durch,
+und er startete den Dienst mitten in der Aktualisierung. Gemessen mit einer
+stummen `date`-Attrappe: 1 Prozess statt 0. Berichtigt in `cron/cron.05min`
+und in `daemon/daemon`.
+
+Unverändert bleibt, dass `daemon/daemon` `apcupsd` anstößt: das ist der
+Systemdienst, nicht der Dienst dieses Plugins.
+
+Der Weg nach einer Installation läuft nicht über `daemon/daemon`:
+`postupgrade.sh` entfernt die Marke und startet danach über den Wächter
+(gemessen, Fall `nach_installation`: null Aufrufe des Startskripts, danach
+genau ein Dienst). Eine Ausnahme für diesen einen Aufruf wird deshalb nicht
+gebraucht.
+
+Gemessen in WSL, nicht am Gerät: `Pruefung-APC-UPS-1.2.11/` (zehn Fälle, 26
+Prüfzeilen; vor der Änderung 5 rot, danach 0), jede Korrektur einzeln
+zurückgebaut und an ihrer Zeile rot (6 von 6). Die 143 Prüfzeilen aus
+`Pruefung-APC-UPS-1.2.10/` bleiben grün.
+
 ## Neu in 1.2.10
 
 **Nach einem Update konnte der Dienst unter dem falschen Themenpräfix senden.**
