@@ -2,14 +2,48 @@
 
 # To use important variables from command line use the following code:
 PDIR=$3       # Third argument is Plugin installation folder
+
+# ---------- Die Wurzel: gelesen, nicht geraten ----------
+# Bis 1.2.12 war sie das fuenfte Argument (weiter unten: oder LBHOMEDIR),
+# ohne Pruefung. Fehlten beide, lauteten die Pfade /data/plugins,
+# /config/plugins, /bin/plugins ab der Laufwerkswurzel (in WSL gemessen,
+# Pruefung-APC-UPS-1.2.13, Fall H4). Dieselbe Stelle wie in preupgrade.sh:
+# $5, dann LBHOMEDIR, dann die Suche nach config/plugins, data/plugins UND
+# config/system/general.json; ohne Wurzel <WARNING> und Rueckgabe 1.
+apc_wurzel_suchen() {
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd -P)
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ "$i" -lt 8 ]; do
+        if [ -d "$v/config/plugins" ] && [ -d "$v/data/plugins" ] \
+           && [ -f "$v/config/system/general.json" ]; then
+            echo "$v"; return 0
+        fi
+        v=$(dirname "$v"); i=$((i + 1))
+    done
+    return 1
+}
+APC_BASE="${5:-}"
+if [ -z "$APC_BASE" ] || [ ! -d "$APC_BASE/config/plugins" ] || [ ! -d "$APC_BASE/data/plugins" ]; then
+    if [ -n "${LBHOMEDIR:-}" ] && [ -d "$LBHOMEDIR/config/plugins" ] \
+       && [ -d "$LBHOMEDIR/data/plugins" ]; then
+        APC_BASE="$LBHOMEDIR"
+    else
+        APC_BASE=$(apc_wurzel_suchen) || APC_BASE=""
+    fi
+fi
+if [ -z "$APC_BASE" ]; then
+    echo "<WARNING> Es wurde keine LoxBerry-Wurzel gefunden: weder als fuenftes Argument"
+    echo "<WARNING> noch in \$LBHOMEDIR, und oberhalb dieses Skripts traegt kein Verzeichnis"
+    echo "<WARNING> config/plugins, data/plugins und config/system/general.json."
+    echo "<WARNING> Es wurde nichts zurueckgespielt und kein Dienst gestartet."
+    exit 1
+fi
 # Rueckfall, falls sudo die Umgebung ausgeraeumt hat (env_reset).
-# Das fuenfte Argument ist das Wurzelverzeichnis und traegt immer.
-LBPCONFIG="${LBPCONFIG:-$5/config/plugins}"
-LBPBIN="${LBPBIN:-$5/bin/plugins}"
+LBPCONFIG="${LBPCONFIG:-$APC_BASE/config/plugins}"
+LBPBIN="${LBPBIN:-$APC_BASE/bin/plugins}"
 # sudo -n -u loxberry setzt die Umgebung zurueck - ohne diesen
 # Rueckfall zeigte $LBPDATA ins Nichts und der Pfad auf /<ordner>.
-LBPDATA="${LBPDATA:-$5/data/plugins}"
-#LBHOMEDIR=$5 # Comes from /etc/environment now.
+LBPDATA="${LBPDATA:-$APC_BASE/data/plugins}"
 
 PCONFIG=$LBPCONFIG/$PDIR
 
@@ -169,8 +203,7 @@ echo "<INFO> Naechster Schritt: Reiter Test -> Jetzt abfragen."
 # Anwender den Dienst ueber enabled=0 an; nur dann laesst der Waechter ihn
 # stehen. Gestartet wird deshalb unter genau der Bedingung des Waechters -
 # durch den Waechter selbst: er startet als loxberry, prueft die Wirkung und
-# startet keinen zweiten.
-APC_BASE="${5:-$LBHOMEDIR}"
+# startet keinen zweiten. APC_BASE ist die Wurzel vom Anfang dieses Skripts.
 APC_PDIR="${3:-apc_ups_ng}"
 APC_NAME="${2:-apc_ups_ng}"
 MARKE="$APC_BASE/data/plugins/$APC_PDIR.upgrade_laeuft"
@@ -222,6 +255,11 @@ fi
 
 if grep -q '^enabled=0' "$PCONFIG/apc_ups_ng.cfg" 2>/dev/null; then
     echo "<INFO> Das Plugin ist ausgeschaltet (enabled=0) - der Dienst wird nicht gestartet."
+elif [ -f "$APC_BASE/data/plugins/$APC_PDIR.angehalten" ]; then
+    # Der Anhaltemerker liegt neben dem Datenordner und hat das Update
+    # ueberstanden (Pruefung-APC-UPS-1.2.13, Fall S3).
+    echo "<INFO> Der Dienst war mit dem Knopf Dienst anhalten angehalten und bleibt es."
+    echo "<INFO> Dienst neu starten im Reiter Test startet ihn wieder."
 elif [ -x "$WAECHTER" ]; then
     WAECHTER_AUS=$("$WAECHTER" 2>&1)
     [ -n "$WAECHTER_AUS" ] && echo "$WAECHTER_AUS" | sed 's/^/<INFO> /'

@@ -9,7 +9,46 @@
 # PID-Datei dort ab, solange /run/shm existiert. Nur wenn es das NICHT tut -
 # und genau dafuer war der zweite Pfad gedacht -, lief das Beenden ins Leere.
 PDIR="${3:-apc_ups_ng}"
-BASE="${5:-$LBHOMEDIR}"
+
+# ---------- Die Wurzel: gelesen, nicht geraten ----------
+# Bis 1.2.12 war BASE das fuenfte Argument oder LBHOMEDIR, ohne Pruefung: fehlten
+# beide, rechnete das Skript mit Pfaden ab der Laufwerkswurzel
+# (/bin/plugins/..., /log/plugins/...) und meldete nichts; ohne $5 fand es die
+# Wurzel auch dann nicht, wenn es selbst darin lag. In WSL gemessen
+# (Pruefung-APC-UPS-1.2.13, Faelle U4, U5). Der Installer legt dieses Skript
+# als <Wurzel>/data/system/uninstall/<ordner> ab und uebergibt die Wurzel als
+# fuenftes Argument; die Suche greift nur, wenn weder $5 noch LBHOMEDIR
+# brauchbar sind. Wurzel ist, was config/plugins, data/plugins UND
+# config/system/general.json traegt (Regeln/06). Ohne Wurzel: <WARNING>,
+# nichts beenden, nichts entfernen, Rueckgabe 1.
+apc_wurzel_suchen() {
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd -P)
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ "$i" -lt 8 ]; do
+        if [ -d "$v/config/plugins" ] && [ -d "$v/data/plugins" ] \
+           && [ -f "$v/config/system/general.json" ]; then
+            echo "$v"; return 0
+        fi
+        v=$(dirname "$v"); i=$((i + 1))
+    done
+    return 1
+}
+BASE="${5:-}"
+if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugins" ]; then
+    if [ -n "${LBHOMEDIR:-}" ] && [ -d "$LBHOMEDIR/config/plugins" ] \
+       && [ -d "$LBHOMEDIR/data/plugins" ]; then
+        BASE="$LBHOMEDIR"
+    else
+        BASE=$(apc_wurzel_suchen) || BASE=""
+    fi
+fi
+if [ -z "$BASE" ]; then
+    echo "<WARNING> Es wurde keine LoxBerry-Wurzel gefunden: weder als fuenftes Argument"
+    echo "<WARNING> noch in \$LBHOMEDIR, und oberhalb dieses Skripts traegt kein Verzeichnis"
+    echo "<WARNING> config/plugins, data/plugins und config/system/general.json."
+    echo "<WARNING> Es wurde kein Dienst beendet und nichts entfernt."
+    exit 1
+fi
 LOGDIR="${LBPLOG:-$BASE/log/plugins}"
 
 # Ist PID ein Dienst dieses Plugins? Argumentweise (Regeln/03): argv[0] ein
@@ -82,6 +121,48 @@ if [ -n "$WAISEN" ]; then
 fi
 rm -f /run/shm/apc_ups_ng_status.json /tmp/apc_ups_ng_status.json
 
+# ---------- Behaltene MQTT-Themen der Linie abraeumen ----------
+# Bis 1.2.12 blieben Zustand, Modell, Seriennummer und letztes Ereignis nach
+# der Deinstallation im Broker stehen, und nach jedem Neustart von Broker
+# oder Gateway bekam der Miniserver sie als frische Werte (in WSL gemessen,
+# Pruefung-APC-UPS-1.2.13, Fall U1). Welche Themen, wie am Broker gefragt und
+# nachgelesen wird: mqtt_leeren() in bin/apc_lesen.py. Erst NACH dem Beenden
+# des Dienstes - sonst schriebe er die Zustaende gleich wieder hinein - und
+# VOR dem Loeschen der Ordner: Konfiguration (Praefix) und bin/ sind hier
+# noch da, der Installer loescht sie erst nach diesem Skript.
+#
+# Als loxberry, nicht als root: gebraucht wird nur Lesezugriff auf die
+# Konfiguration und auf general.json. stdin geschlossen, damit su nie auf
+# eine Eingabe wartet.
+#
+# 'timeout -k 5 60': ohne -k schickt timeout nach 60 s nur SIGTERM, und ein
+# Programm, das es nicht annimmt, hielte die Deinstallation an, bis es von
+# selbst endet (Befund aus Sprachsteuerung 0.11.10, dort ueber acht Stunden;
+# Vorbild Weissware 0.9.34). Gemessen mit einem SIGTERM-festen Platzhalter
+# (Pruefung-APC-UPS-1.2.13, Fall U3): nach 65 s ist Schluss, und der Abbruch
+# steht als WARNING da.
+APC_BIN="$BASE/bin/plugins/$PDIR"
+APC_RC=0
+if [ -f "$APC_BIN/apc_lesen.py" ] && command -v python3 >/dev/null 2>&1; then
+    if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+        su -s /bin/bash loxberry -c "$(printf '%q ' env PYTHONDONTWRITEBYTECODE=1 \
+            "LBHOMEDIR=$BASE" "LBPPLUGINDIR=$PDIR" timeout -k 5 60 python3 \
+            "$APC_BIN/apc_lesen.py" --mqtt-leeren)" < /dev/null 2>&1 || APC_RC=$?
+    else
+        env PYTHONDONTWRITEBYTECODE=1 "LBHOMEDIR=$BASE" "LBPPLUGINDIR=$PDIR" \
+            timeout -k 5 60 python3 "$APC_BIN/apc_lesen.py" --mqtt-leeren \
+            < /dev/null 2>&1 || APC_RC=$?
+    fi
+    case "$APC_RC" in
+        0|1|2) ;;
+        124) echo "<WARNING> MQTT: das Leeren der behaltenen Themen wurde nach 60 s abgebrochen - unter dem Praefix der Linie kann noch etwas im Broker stehen. Von Hand: mosquitto_pub -r -n -t <thema>" ;;
+        137) echo "<WARNING> MQTT: das Leeren der behaltenen Themen reagierte nach 60 s nicht auf SIGTERM und wurde hart beendet (SIGKILL) - unter dem Praefix der Linie kann noch etwas im Broker stehen. Von Hand: mosquitto_pub -r -n -t <thema>" ;;
+        *) echo "<WARNING> MQTT: das Leeren der behaltenen Themen endete unerwartet (Rueckgabe $APC_RC) - unter dem Praefix der Linie kann noch etwas im Broker stehen." ;;
+    esac
+else
+    echo "<INFO> python3 oder $APC_BIN/apc_lesen.py fehlt - behaltene MQTT-Themen wurden nicht geleert."
+fi
+
 # apcupsd wird bewusst NICHT entfernt. Die Originalfassung rief hier
 #   sudo apt-get remove apcupsd
 # ohne -y auf - das haette auf die Rueckfrage gewartet und die
@@ -96,7 +177,7 @@ echo "<INFO> Wer es loswerden will: sudo apt-get remove -y apcupsd"
 # LoxBerry beim Deinstallieren loescht - genau deshalb uebersteht er ein
 # Update. Wer ihn hier nicht abraeumt, laesst Zugangsdaten liegen.
 UN_FOLDER="${3:-}"
-UN_BASE="${5:-$LBHOMEDIR}"
+UN_BASE="$BASE"
 if [ -n "$UN_FOLDER" ] && [ -n "$UN_BASE" ] && [ -d "$UN_BASE/data/plugins" ]; then
     rm -rf "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_sicherung" 2>/dev/null
     # Zwischenstaende aus preupgrade.sh (neu bauen, dann umbenennen);
@@ -107,6 +188,9 @@ if [ -n "$UN_FOLDER" ] && [ -n "$UN_BASE" ] && [ -d "$UN_BASE/data/plugins" ]; t
     # einem abgebrochenen Upgrade liegen, sperrte sie den Waechter einer
     # Neuinstallation bis zu einer Stunde.
     rm -f "$UN_BASE/data/plugins/$UN_FOLDER.upgrade_laeuft" 2>/dev/null
+    # Der Anhaltemerker des Knopfs "Dienst anhalten". Bliebe er liegen, bliebe
+    # der Dienst einer Neuinstallation angehalten, ohne dass es jemand weiss.
+    rm -f "$UN_BASE/data/plugins/$UN_FOLDER.angehalten" 2>/dev/null
 fi
 
 # ---------- Die Zweitschrift neben dem Konfigordner wegraeumen ----------

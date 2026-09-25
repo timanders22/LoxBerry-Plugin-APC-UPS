@@ -118,7 +118,12 @@ function ap_themen_kongruenz()
     }
     $out = array();
     $rc = 0;
-    @exec('timeout 20 python3 ' . escapeshellarg($skript) . ' --themen 2>&1', $out, $rc);
+    // 'timeout -k 5 20': ohne -k schickt timeout nach 20 s nur SIGTERM, und
+    // ein Aufruf, der es nicht annimmt, hielt die Seite fest, bis er von
+    // selbst endete. In WSL gemessen (Pruefung-APC-UPS-1.2.13, Fall T1, mit
+    // einem SIGTERM-festen Platzhalter): 118 s statt 25 s. Mit -k folgt nach
+    // weiteren 5 s SIGKILL; die Rueckgabe ist dann 137.
+    @exec('timeout -k 5 20 python3 ' . escapeshellarg($skript) . ' --themen 2>&1', $out, $rc);
     $j = @json_decode(trim(implode("\n", $out)), true);
     if (!is_array($j) || !isset($j['gleich'])) {
         return array(null, ap_e(sprintf(ap_t('TEST.TH_UNLESBAR'), $rc)));
@@ -229,12 +234,24 @@ function ap_test_selbstpruefung($cfg, $w, $pid, $alter, $broker, $autostart)
     }
 
     // --- Der eigene Dienst -------------------------------------------------
-    $z = $zaehle($pid > 0);
-    ap_pruefzeile(ap_t('TEST.F_DIENST'), $z,
-        $pid > 0 ? 'PID ' . (int) $pid : ap_e(ap_t('TEST.A_DIENST_TOT')));
+    // Bewusst angehalten (Knopf "Dienst anhalten") ist kein Fehler: dann ein
+    // Hinweis statt eines Kreuzes, das zum Suchen im Protokoll schickt - und
+    // die Frische der Zustandsdatei urteilt dann ebenfalls nicht (Fall S8).
+    $angehalten = ($pid <= 0 && ap_angehalten());
+    if ($angehalten) {
+        ap_pruefzeile(ap_t('TEST.F_DIENST'), $zaehle(null),
+            ap_e(ap_t('TEST.A_DIENST_ANGEHALTEN')));
+    } else {
+        $z = $zaehle($pid > 0);
+        ap_pruefzeile(ap_t('TEST.F_DIENST'), $z,
+            $pid > 0 ? 'PID ' . (int) $pid : ap_e(ap_t('TEST.A_DIENST_TOT')));
+    }
 
     $takt = (int) ap_cfg($cfg, 'intervall', '30');
-    if ($alter < 0) {
+    if ($angehalten) {
+        ap_pruefzeile(ap_t('TEST.F_FRISCH'), $zaehle(null),
+            ap_e(ap_t('TEST.A_DIENST_ANGEHALTEN')));
+    } elseif ($alter < 0) {
         ap_pruefzeile(ap_t('TEST.F_FRISCH'), $zaehle(false), ap_e(ap_t('TEST.A_KEINE_DATEI')));
     } else {
         $frisch = $alter <= 3 * max(5, $takt);
@@ -356,12 +373,16 @@ function ap_einmal_lesen()
     }
     $out = array();
     $rc = 0;
-    @exec('timeout 30 python3 ' . escapeshellarg($skript) . ' 2>&1', $out, $rc);
+    // 'timeout -k 5 30': ohne -k hielt ein Aufruf, der SIGTERM nicht annimmt,
+    // die Seite fest, bis er von selbst endete - in WSL gemessen
+    // (Pruefung-APC-UPS-1.2.13, Fall T2): 117 s statt 35 s.
+    @exec('timeout -k 5 30 python3 ' . escapeshellarg($skript) . ' 2>&1', $out, $rc);
     $roh = trim(implode("\n", $out));
-    // timeout meldet 124, wenn es zugeschlagen hat. Ohne diese Unterscheidung
-    // stand dort "keine verwertbare Antwort" - und der Nutzer suchte den
-    // Fehler im JSON statt in der haengenden Abfrage.
-    if ($rc === 124) {
+    // timeout meldet 124, wenn es zugeschlagen hat, und 137, wenn erst das
+    // SIGKILL nach -k half. Ohne diese Unterscheidung stand dort "keine
+    // verwertbare Antwort" - und der Nutzer suchte den Fehler im JSON statt
+    // in der haengenden Abfrage.
+    if ($rc === 124 || $rc === 137) {
         return array('fehler' => ap_t('TEST.ABFRAGE_HAENGT'));
     }
     $j = @json_decode($roh, true);
@@ -589,15 +610,16 @@ function ap_test_ausfuehren($was)
                       $info['art'], $info['retain'] ? 'R' : '-', ap_thema_text($k));
             }
             $t .= "\n" . ap_t('MQTT.RETAIN_KURZ') . "\n";
-            // Prueft die Hausregel, nicht nur die Anzeige: das Lebenszeichen
-            // ist nie retained (Regeln/07, Hausstandard 03.09.2026,
-            // bekraeftigt 17.09.2026). Bis 1.2.9 waren service/online und
-            // timestamp retained - der Broker sagte damit "lebt" fuer einen
-            // Dienst, der seit Tagen stand. Die Zeile urteilt ueber eine
+            // Prueft die Hausregel, nicht nur die Anzeige: Lebenszeichen,
+            // Aussagen des Dienstes ueber sich selbst und ein Alter sind nie
+            // retained (Regeln/07; ap_nie_retained_themen()). Bis 1.2.9
+            // waren service/online und timestamp retained - der Broker sagte
+            // damit "lebt" fuer einen Dienst, der seit Tagen stand; bis 1.2.12
+            // valid und battery_age_months. Die Zeile urteilt ueber eine
             // Menge und sagt deshalb zuerst, ob sie leer ist.
             $falsch = array();
             $gefunden = 0;
-            foreach (ap_lebenszeichen_themen() as $k) {
+            foreach (ap_nie_retained_themen() as $k) {
                 if (!isset($themen[$k])) {
                     continue;
                 }
@@ -609,7 +631,7 @@ function ap_test_ausfuehren($was)
             $t .= "\n";
             if ($gefunden === 0) {
                 $t .= sprintf(ap_t('TEST.M_LEBEN_FEHLT'),
-                      implode(', ', ap_lebenszeichen_themen())) . "\n";
+                      implode(', ', ap_nie_retained_themen())) . "\n";
             } elseif ($falsch) {
                 $t .= sprintf(ap_t('TEST.M_LEBEN_ROT'), implode(', ', $falsch)) . "\n";
             } else {
@@ -618,6 +640,13 @@ function ap_test_ausfuehren($was)
             return array(ap_t('TEST.K_MQTT'), $t);
 
         case 'melden':
+            // Aus einem Archiv wird nichts in den Benachrichtigungsbereich
+            // gelegt. Bis 1.2.12 rief der Knopf dort das apc_notify.php der
+            // ANLAGE, und die Meldung landete bei ihr (in WSL gemessen,
+            // Pruefung-APC-UPS-1.2.13, Fall O11).
+            if ($p['home'] === '') {
+                return array(ap_t('TEST.K_MELDEN'), ap_archiv_text());
+            }
             $skript = $p['bindir'] . '/apc_notify.php';
             if (!is_file($skript)) {
                 return array(ap_t('TEST.K_MELDEN'),
@@ -625,8 +654,11 @@ function ap_test_ausfuehren($was)
             }
             $out = array();
             $rc = 0;
+            // Der Pluginordner als drittes Argument, wie der Dienst ihn
+            // mitgibt - sonst griff apc_notify.php auf den festen Namen zurueck.
             @exec('php ' . escapeshellarg($skript) . ' 6 '
-                . escapeshellarg(ap_t('TEST.ME_TEXT'))
+                . escapeshellarg(ap_t('TEST.ME_TEXT')) . ' '
+                . escapeshellarg($p['plugin'])
                 . ' 2>&1', $out, $rc);
             return array(ap_t('TEST.K_MELDEN'),
                 ($rc === 0 ? ap_t('TEST.ME_OK') : ap_t('TEST.ME_FEHL'))
@@ -642,8 +674,18 @@ function ap_test_ausfuehren($was)
         case 'stop':
             $aus = ap_dienst('stop');
             $pid = ap_dienst_pid();
+            // Gesagt wird, was nachgesehen ist: liegt der Anhaltemerker, bleibt
+            // der Dienst aus; liegt er nicht, startet ihn der Waechter wieder.
+            if ($p['home'] === '') {
+                $bleibt = '';
+            } elseif (ap_angehalten()) {
+                $bleibt = "\n" . ap_t('TEST.S_BLEIBT');
+            } else {
+                $bleibt = "\n" . sprintf(ap_t('TEST.S_MERKER_FEHLT'), ap_anhalte_merker());
+            }
             return array(ap_t('TEST.K_STOP'),
                 ($pid ? sprintf(ap_t('TEST.S_LAEUFT_NOCH'), $pid) : ap_t('TEST.S_ANGEHALTEN'))
+                . $bleibt
                 . ($aus !== '' ? "\n\n" . $aus : ''));
     }
 

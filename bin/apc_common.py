@@ -35,17 +35,32 @@ import subprocess
 import time
 
 
+def _ist_lbwurzel(d):
+    """Traegt d eine LoxBerry-Wurzel?
+
+    config/plugins, data/plugins UND config/system/general.json. Die dritte
+    Bedingung unterscheidet eine Wurzel von dem Rest, den ein Pruefstand auf
+    einem Arbeitsrechner hinterlaesst (Regeln/06, Wurzelsuche).
+    """
+    return (os.path.isdir(os.path.join(d, "config", "plugins"))
+            and os.path.isdir(os.path.join(d, "data", "plugins"))
+            and os.path.isfile(os.path.join(d, "config", "system", "general.json")))
+
+
 def lb_wurzel_ermitteln():
     """Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
 
-    Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
-    config/plugins UND webfrontend enthaelt. Trifft die uebliche
-    Installation genauso wie eine an einem anderen Ort.
+    Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis die Merkmale aus
+    _ist_lbwurzel() traegt. Findet die Suche nichts, ist die Antwort "" -
+    einen Rueckfall danach gibt es nicht; jeder Aufrufer faengt das ab.
+
+    Bis 1.2.12 genuegten config/plugins und webfrontend. In WSL gemessen
+    (Pruefung-APC-UPS-1.2.13, Fall P1): in einem fremden Baum ohne
+    general.json wurde dieser Baum zur Wurzel.
     """
     d = os.path.dirname(os.path.abspath(__file__))
     for _ in range(8):
-        if os.path.isdir(os.path.join(d, "config", "plugins")) \
-                and os.path.isdir(os.path.join(d, "webfrontend")):
+        if _ist_lbwurzel(d):
             return d
         eltern = os.path.dirname(d)
         if eltern == d:
@@ -54,36 +69,136 @@ def lb_wurzel_ermitteln():
     return ""
 
 
+def _lbhome_umgebung():
+    """LBHOMEDIR, wenn es auf config/plugins und data/plugins zeigt, sonst "".
+
+    general.json wird hier nicht verlangt, damit die Attrappe der
+    Pruefwerkzeuge (Werkzeuge/lb) weiter traegt - wer LBHOMEDIR setzt, nennt
+    die Wurzel ausdruecklich.
+    """
+    h = (os.environ.get("LBHOMEDIR") or "").rstrip("/")
+    if h and os.path.isdir(os.path.join(h, "config", "plugins")) \
+            and os.path.isdir(os.path.join(h, "data", "plugins")):
+        return h
+    return ""
+
+
+# Archivmodus.
+#
+# Die Pfade DER ANLAGE gelten nur, wenn diese Datei installiert ist - dann hat
+# der Installer die Platzhalter unten durch die echten Ordner ersetzt - oder
+# wenn der Aufrufer Wurzel UND Ordner ausdruecklich nennt (LBHOMEDIR und
+# LBPPLUGINDIR; so arbeiten die Pruefwerkzeuge). Sonst ist das ein
+# ausgepacktes Archiv oder ein Pruefordner: alles bleibt in dessen eigenem
+# Ordner, der Dienst verweigert den Start (apc_service.py) und das Leeren des
+# Brokers ebenso (apc_lesen.py --mqtt-leeren).
+#
+# Bis 1.2.12 nahm ein Archiv unterhalb einer echten Wurzel diese Wurzel und
+# den festen Namen apc_ups_ng - Konfiguration, Datenordner und Protokoll der
+# Anlage; ohne jede Wurzel lauteten die Pfade /config/plugins/... ab der
+# Laufwerkswurzel. In WSL gemessen (Pruefung-APC-UPS-1.2.13, Faelle P2 bis
+# P4): ein aus dem Archiv gestarteter Dienst schrieb ins Protokoll der
+# Anlage. Bauart wie tb_paths() in Spotpreis-Tibber 0.9.19.
+_ARCHIV = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_KEIN_ORDNER = ("", ".", "/", "bin", "plugins", "html", "htmlauth")
+
 PLUGIN_NAME = "REPLACELBPPLUGINDIR"
-if PLUGIN_NAME.startswith("REPLACE"):
+INSTALLIERT = not PLUGIN_NAME.startswith("REPLACE")
+_LBP = os.path.basename((os.environ.get("LBPPLUGINDIR") or "").rstrip("/"))
+AUSDRUECKLICH = (not INSTALLIERT and _LBP not in _KEIN_ORDNER
+                 and _lbhome_umgebung() != "")
+ARCHIVMODUS = not INSTALLIERT and not AUSDRUECKLICH
+
+if INSTALLIERT:
+    CONFIG_DIR = "REPLACELBPCONFIGDIR"
+    LOG_DIR = "REPLACELBPLOGDIR"
+    DATA_DIR = "REPLACELBPDATADIR"
+    HOME_DIR = _lbhome_umgebung() or lb_wurzel_ermitteln()
+elif AUSDRUECKLICH:
+    PLUGIN_NAME = _LBP
+    HOME_DIR = _lbhome_umgebung()
+    CONFIG_DIR = HOME_DIR + "/config/plugins/" + PLUGIN_NAME
+    LOG_DIR = HOME_DIR + "/log/plugins/" + PLUGIN_NAME
+    DATA_DIR = HOME_DIR + "/data/plugins/" + PLUGIN_NAME
+else:
     PLUGIN_NAME = "apc_ups_ng"
+    HOME_DIR = ""
+    CONFIG_DIR = os.path.join(_ARCHIV, "config")
+    LOG_DIR = os.path.join(_ARCHIV, "log")
+    DATA_DIR = os.path.join(_ARCHIV, "data")
 
-CONFIG_DIR = "REPLACELBPCONFIGDIR"
-if CONFIG_DIR.startswith("REPLACE"):
-    CONFIG_DIR = lb_wurzel_ermitteln() + "/config/plugins/" + PLUGIN_NAME
-
-LOG_DIR = "REPLACELBPLOGDIR"
-if LOG_DIR.startswith("REPLACE"):
-    LOG_DIR = lb_wurzel_ermitteln() + "/log/plugins/" + PLUGIN_NAME
-
-DATA_DIR = "REPLACELBPDATADIR"
-if DATA_DIR.startswith("REPLACE"):
-    DATA_DIR = lb_wurzel_ermitteln() + "/data/plugins/" + PLUGIN_NAME
-
-HOME_DIR = os.environ.get("LBHOMEDIR") or lb_wurzel_ermitteln()
 CONFIG_FILE = os.path.join(CONFIG_DIR, "apc_ups_ng.cfg")
+
+
+def archiv_meldung(programm):
+    """Der Text, mit dem ein Programm im Archivmodus verweigert."""
+    gefunden = lb_wurzel_ermitteln()
+    wo = (" unter " + gefunden) if gefunden else ""
+    return ("{0}: Diese Datei liegt nicht in einer LoxBerry-Installation{1}\n"
+            "(ausgepacktes Archiv oder Pruefordner: {2}). Damit nichts in eine\n"
+            "Anlage kommt, wurde nichts gestartet, nichts gesendet und nichts\n"
+            "geschrieben. Abhilfe: das installierte Programm unter\n"
+            "<Wurzel>/bin/plugins/<ordner> aufrufen oder LBHOMEDIR und\n"
+            "LBPPLUGINDIR ausdruecklich setzen.\n").format(programm, wo, _ARCHIV)
+
 
 # Die Zugangsdaten des MQTT-Brokers stehen nicht in der Plugin-Konfiguration,
 # sondern in der Systemdatei von LoxBerry. Der Dienst beobachtet auch ihre
 # Aenderungszeit - bis 1.2.10 bemerkte er einen Brokerwechsel erst, wenn
-# jemand ausserdem die Plugin-Einstellungen speicherte.
-GENERAL_FILE = os.path.join(HOME_DIR, "config", "system", "general.json")
+# jemand ausserdem die Plugin-Einstellungen speicherte. Ohne Wurzel gibt es
+# keine - dann ist der Pfad leer und es gibt keinen Broker, statt eines
+# Pfades ab der Laufwerkswurzel.
+GENERAL_FILE = (os.path.join(HOME_DIR, "config", "system", "general.json")
+                if HOME_DIR else "")
 
-# Merker: die zurueckbehaltenen Altwerte des Lebenszeichens (service/online,
-# timestamp) sind einmal aus dem Broker geloescht. Er liegt IM Datenordner
-# und damit absichtlich nicht upgradefest: nach einem Upgrade wird noch
-# einmal abgeraeumt, und das kostet zwei Nachrichten.
-RETAIN_MERKER = os.path.join(DATA_DIR, "retain_lebenszeichen_geraeumt")
+# Themen, die in einer Vorfassung zurueckbehalten hinausgingen und es heute
+# nicht mehr tun. Ein zurueckbehaltener Altwert verschwindet nicht dadurch,
+# dass niemand mehr retained sendet; der Dienst raeumt ihn deshalb einmal ab
+# (Dienst._altlast() in apc_service.py):
+#   service/online, timestamp   Lebenszeichen, bis 1.2.9 retained
+#   valid                       Aussage des Dienstes ueber seine eigene
+#                               apcaccess-Abfrage, bis 1.2.12 retained
+#                               (Regeln/07, Entscheidung 19.09.2026)
+#   battery_age_months          ein Alter, allein durch die Uhr falsch, bis
+#                               1.2.12 retained (Regeln/07, 18. und 24.09.2026)
+ALTLAST = ("service/online", "timestamp", "valid", "battery_age_months")
+
+# Merker "abgeraeumt und beim Broker nachgelesen". Er liegt IM Datenordner und
+# ist damit absichtlich nicht upgradefest: nach einem Upgrade fragt der Dienst
+# einmal nach (zwei Abonnements, kein Senden, wenn nichts mehr liegt). Seine
+# Kennung traegt Praefix UND Themenliste - ein Merker einer Vorfassung
+# (retain_lebenszeichen_geraeumt, nur zwei Themen, auf das blosse Senden
+# gesetzt) oder ein gewechseltes Praefix taeuscht kein "schon erledigt" vor.
+# Gesetzt wird er erst, wenn ein zweites Abonnement nichts mehr findet.
+ALTLAST_MERKER = os.path.join(DATA_DIR, "retain_altlast")
+
+
+def altlast_kennung(praefix):
+    return "apc-altlast-1|{0}|{1}".format(praefix, ",".join(sorted(ALTLAST)))
+
+
+def altlast_merker_lesen():
+    try:
+        with open(ALTLAST_MERKER, "r", encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def altlast_merker_schreiben(kennung):
+    neben = ALTLAST_MERKER + ".neu"
+    try:
+        os.makedirs(os.path.dirname(ALTLAST_MERKER), exist_ok=True)
+        with open(neben, "w", encoding="utf-8") as fh:
+            fh.write(kennung + "\n")
+        os.replace(neben, ALTLAST_MERKER)
+        return True
+    except OSError:
+        try:
+            os.unlink(neben)
+        except OSError:
+            pass
+        return False
 
 
 def _zeitzone_setzen():
@@ -134,8 +249,11 @@ def version():
     Massgeblich ist, was LoxBerry bei der Installation uebernommen hat.
 
     Gibt "" zurueck, wenn sich die Fassung nicht ermitteln laesst - dann steht
-    im Protokoll keine Nummer, was besser ist als eine falsche.
+    im Protokoll keine Nummer, was besser ist als eine falsche. Ohne Wurzel
+    ebenso - der Pfad waere sonst relativ zum Arbeitsverzeichnis.
     """
+    if not HOME_DIR:
+        return ""
     datei = os.path.join(HOME_DIR, "data", "system", "plugindatabase.json")
     try:
         with open(datei, "r", encoding="utf-8") as f:
@@ -817,11 +935,197 @@ def mqtt_zugangsdaten():
         host = hole("Brokerhost", "brokerhost")
         if not host:
             continue
+        # Ein Port, der keine Zahl ist, wird nicht zurechtgebogen: er bleibt
+        # 0, und connect() meldet ihn als ungueltig (der Aufrufer faengt das
+        # ab und protokolliert es). Bis 1.2.12 warf int() hier - und der
+        # Dienst endete mit "Unerwarteter Fehler".
+        try:
+            port = int(hole("Brokerport", "brokerport") or 1883)
+        except (TypeError, ValueError):
+            port = 0
         return {"host": str(host),
-                "port": int(hole("Brokerport", "brokerport") or 1883),
+                "port": port,
                 "user": hole("Brokeruser", "brokeruser"),
                 "pass": hole("Brokerpass", "brokerpass")}
     return None
+
+
+# Klartext zu den Rueckgabecodes eines CONNACK (MQTT 3.1.1).
+CONNACK_TEXT = {1: "Protokollfassung abgelehnt", 2: "Client-Kennung abgelehnt",
+                3: "Broker nicht verfuegbar", 4: "Benutzername oder Kennwort falsch",
+                5: "nicht berechtigt"}
+
+
+def broker_leeren(praefix, auswahl, warten=1.5, nach_loeschen=None):
+    """Behaltene Themen unter <praefix>/ am Broker loeschen und NACHLESEN.
+
+    nach_loeschen(themen) wird unmittelbar nach den Loeschungen gerufen, noch
+    vor dem Nachlesen - dort sendet der Dienst die gueltigen Werte hinterher.
+    Im ersten Bau stand das Senden hinter dem Nachlesen: der gueltige Wert
+    kam 1,5 s nach der Loeschung, und so lange stand im Miniserver der leere
+    Wert (in WSL gemessen, Pruefung-APC-UPS-1.2.13, Fall A5).
+
+    Ueber paho mit Brokerhost, Brokerport, Brokeruser und Brokerpass aus
+    general.json, auf einer eigenen, kurzen Verbindung:
+      1. geloescht wird nur, was WIRKLICH behalten im Broker liegt - gefunden
+         ueber ein Abonnement - und was auswahl(thema) freigibt;
+      2. danach ein zweites Abonnement: was dann noch behalten ankommt, ist
+         stehengeblieben.
+    Rueckgabe {"rc", "geleert", "rest", "grund"}: rc 0 = nichts (mehr)
+    behalten, 1 = nach dem Loeschen stand noch etwas, 2 = nicht zu fragen
+    (kein paho, kein Broker, Anmeldung abgewiesen, Abonnement abgelehnt).
+
+    Beide Abonnements gelten erst mit ihrem SUBACK. Ein Broker, dessen ACL
+    das Lesen verweigert, antwortet mit 0x80 und schickt danach nichts;
+    ungeprueft hiesse das "nichts behalten" (Muster 11 der Nachlese).
+    CONNACK ungleich 0 heisst ebenso "nicht zu fragen", nie "nichts belegt".
+    Bauart: _broker_leeren() in Bewaesserung, bw_mqtt_behalten_liste() im
+    Beschattungswaechter 0.9.21, mqtt_altlast_abraeumen() in VolkswagenID
+    0.9.24. Gemessen in WSL mit echtem paho 1.6.1 gegen einen eigenen Broker
+    (Pruefung-APC-UPS-1.2.13, Faelle A1 bis A10, U1, U2).
+    """
+    erg = {"rc": 2, "geleert": [], "rest": [], "grund": ""}
+    praefix = str(praefix or "").strip("/")
+    if not praefix or "#" in praefix or "+" in praefix:
+        erg["grund"] = "das Themenpraefix '{0}' taugt nicht fuer ein Abonnement".format(praefix)
+        return erg
+    try:
+        import paho.mqtt.client as mqtt
+    except ImportError:
+        erg["grund"] = "das Paket paho-mqtt fehlt"
+        return erg
+    import threading
+    z = mqtt_zugangsdaten()
+    if not z:
+        erg["grund"] = "kein MQTT-Broker in general.json"
+        return erg
+    wo = "{0}:{1}".format(z["host"], z["port"])
+    gesehen = set()
+    angemeldet = threading.Event()
+    code = {"wert": None}
+    # Je Paketkennung die Rueckgabecodes des SUBACK. paho 1.x und VERSION1:
+    # Zahlen; VERSION2: ReasonCode-Objekte mit .value. 0x80 und darueber
+    # heisst abgelehnt.
+    subacks = {}
+
+    def bei_verbindung(_k, _d, _f, *rest):
+        # paho 1.x und VERSION1: rc als Zahl; VERSION2: ReasonCode mit .value
+        try:
+            code["wert"] = int(getattr(rest[0], "value", rest[0]) or 0) if rest else 0
+        except (TypeError, ValueError):
+            code["wert"] = 0
+        angemeldet.set()
+
+    def bei_nachricht(_k, _d, n):
+        # Nur BEHALTENES mit Inhalt: ein live gesendeter Wert ist keine
+        # Altlast, und ein leeres Thema ist schon geloescht.
+        if n.retain and n.payload and auswahl(n.topic):
+            gesehen.add(n.topic)
+
+    def bei_abo(_k, _d, mid, codes, *_rest):
+        werte = []
+        try:
+            for c in (codes or ()):
+                werte.append(int(getattr(c, "value", c)))
+        except (TypeError, ValueError):
+            werte = [0x80]
+        subacks[mid] = werte or [0x80]
+
+    def abonnieren():
+        """praefix/# abonnieren und den SUBACK abwarten. "" = bestaetigt,
+        sonst der Grund, warum der Broker nicht zu fragen ist."""
+        erg_sub = k.subscribe(praefix + "/#")
+        try:
+            rc_sub, mid = int(erg_sub[0]), erg_sub[1]
+        except (TypeError, ValueError, IndexError):
+            return "das Abonnement liess sich nicht absenden ({0!r})".format(erg_sub)
+        if rc_sub != 0:
+            return "das Abonnement liess sich nicht absenden (rc {0})".format(rc_sub)
+        ende = time.time() + 10
+        while mid not in subacks and time.time() < ende:
+            time.sleep(0.05)
+        if mid not in subacks:
+            return "der Broker {0} hat das Abonnement nicht bestaetigt (kein SUBACK)".format(wo)
+        schlecht = [w for w in subacks[mid] if w >= 0x80]
+        if schlecht:
+            return ("der Broker {0} verweigert das Lesen von '{1}/#' (SUBACK 0x{2:02X})"
+                    .format(wo, praefix, schlecht[0]))
+        return ""
+
+    name = "apc-ups-ng-leeren-{0}".format(os.getpid())
+    k = None
+    for art in ("VERSION2", "VERSION1"):
+        api = getattr(getattr(mqtt, "CallbackAPIVersion", None), art, None)
+        if api is None:
+            continue
+        try:
+            k = mqtt.Client(api, client_id=name)
+            break
+        except (AttributeError, TypeError, ValueError):
+            k = None
+    if k is None:
+        k = mqtt.Client(client_id=name)     # paho-mqtt 1.x
+    k.on_connect = bei_verbindung
+    k.on_message = bei_nachricht
+    k.on_subscribe = bei_abo
+    if z.get("user"):
+        k.username_pw_set(str(z["user"]), str(z.get("pass") or "") or None)
+    try:
+        k.connect(z["host"], z["port"], 30)
+    except Exception as fehler:  # noqa: BLE001
+        erg["grund"] = "der Broker {0} ist nicht erreichbar ({1}: {2})".format(
+            wo, type(fehler).__name__, fehler)
+        return erg
+    k.loop_start()
+    try:
+        if not angemeldet.wait(10):
+            erg["grund"] = "der Broker {0} hat auf die Verbindung nicht geantwortet".format(wo)
+            return erg
+        if code["wert"]:
+            erg["grund"] = "der Broker {0} hat die Anmeldung abgewiesen (CONNACK {1}: {2})".format(
+                wo, code["wert"], CONNACK_TEXT.get(code["wert"], "unbekannter Grund"))
+            return erg
+        grund = abonnieren()
+        if grund:
+            erg["grund"] = grund
+            return erg
+        time.sleep(warten)
+        k.unsubscribe(praefix + "/#")
+        zu_leeren = sorted(gesehen)
+        for thema in zu_leeren:
+            info = k.publish(thema, b"", qos=1, retain=True)
+            try:
+                info.wait_for_publish(5)
+            except TypeError:           # paho 1.x vor 1.6 kennt kein timeout
+                info.wait_for_publish()
+        erg["geleert"] = zu_leeren
+        if nach_loeschen is not None and zu_leeren:
+            try:
+                nach_loeschen(zu_leeren)
+            except Exception:  # noqa: BLE001
+                pass
+        # NACHLESEN: ein neues Abonnement bekommt alles, was noch behalten ist.
+        gesehen.clear()
+        grund = abonnieren()
+        if grund:
+            # Geloescht ist dann schon; bestaetigt ist es nicht.
+            erg["grund"] = "Nachlesen nicht moeglich - " + grund
+            return erg
+        time.sleep(warten)
+        erg["rest"] = sorted(gesehen)
+        erg["rc"] = 1 if erg["rest"] else 0
+    except Exception as fehler:  # noqa: BLE001
+        erg["rc"] = 2
+        erg["grund"] = "das Loeschen am Broker {0} scheiterte ({1}: {2})".format(
+            wo, type(fehler).__name__, fehler)
+    finally:
+        # ERST abmelden, DANN den Netzstrang anhalten.
+        try:
+            k.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
+        k.loop_stop()
+    return erg
 
 
 def benachrichtigen(text, schwere="warning"):
@@ -841,10 +1145,10 @@ def benachrichtigen(text, schwere="warning"):
     try:
         # Den Pluginordner ausdruecklich mitgeben. Der Dienst wird ueber
         # su loxberry -c gestartet, und das raeumt die LoxBerry-Umgebung ab -
-        # getenv('LBPPLUGINDIR') im Helfer waere leer. Der Rueckfall dort
-        # traegt den festen Namen apc_ups_ng; wer das Plugin in einen anderen
-        # Ordner installiert hat, faende seine Warnung dann unter einem
-        # Paketnamen, den LoxBerry nicht kennt, und damit gar nicht.
+        # getenv('LBPPLUGINDIR') im Helfer waere leer. Bis 1.2.12 trug der
+        # Rueckfall dort den festen Namen apc_ups_ng; wer das Plugin in einen
+        # anderen Ordner installiert hatte, faende seine Warnung dann unter
+        # einem Paketnamen, den LoxBerry nicht kennt, und damit gar nicht.
         lauf = subprocess.run(["php", helfer, stufe, text, PLUGIN_NAME],
                               capture_output=True, text=True, timeout=15)
         return lauf.returncode == 0

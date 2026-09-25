@@ -2,15 +2,52 @@
 
 # To use important variables from command line use the following code:
 PDIR=$3       # Third argument is Plugin installation folder
+
+# ---------- Die Wurzel: gelesen, nicht geraten ----------
+# Bis 1.2.12 war sie das fuenfte Argument oder LBHOMEDIR, ohne Pruefung. Fehlten beide,
+# lauteten die Pfade /data/plugins, /config/plugins, /log/plugins - ab der
+# Laufwerkswurzel, und dieses Skript legte dort die Marke an (am Geraet als
+# loxberry nicht moeglich, als root schon). In WSL gemessen
+# (Pruefung-APC-UPS-1.2.13, Fall H1). Reihenfolge: $5, dann LBHOMEDIR - beide
+# nur mit config/plugins und data/plugins darunter -, dann die Suche vom
+# eigenen Ablageort aufwaerts nach config/plugins, data/plugins UND
+# config/system/general.json (Regeln/06). Ohne Wurzel: <WARNING>, nichts
+# anlegen, nichts sichern, keinen Dienst anhalten, Rueckgabe 1. Dieselbe
+# Stelle steht in postinstall.sh und postupgrade.sh.
+apc_wurzel_suchen() {
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd -P)
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ "$i" -lt 8 ]; do
+        if [ -d "$v/config/plugins" ] && [ -d "$v/data/plugins" ] \
+           && [ -f "$v/config/system/general.json" ]; then
+            echo "$v"; return 0
+        fi
+        v=$(dirname "$v"); i=$((i + 1))
+    done
+    return 1
+}
+APC_BASE="${5:-}"
+if [ -z "$APC_BASE" ] || [ ! -d "$APC_BASE/config/plugins" ] || [ ! -d "$APC_BASE/data/plugins" ]; then
+    if [ -n "${LBHOMEDIR:-}" ] && [ -d "$LBHOMEDIR/config/plugins" ] \
+       && [ -d "$LBHOMEDIR/data/plugins" ]; then
+        APC_BASE="$LBHOMEDIR"
+    else
+        APC_BASE=$(apc_wurzel_suchen) || APC_BASE=""
+    fi
+fi
+if [ -z "$APC_BASE" ]; then
+    echo "<WARNING> Es wurde keine LoxBerry-Wurzel gefunden: weder als fuenftes Argument"
+    echo "<WARNING> noch in \$LBHOMEDIR, und oberhalb dieses Skripts traegt kein Verzeichnis"
+    echo "<WARNING> config/plugins, data/plugins und config/system/general.json."
+    echo "<WARNING> Es wurde nichts angelegt, nichts gesichert und kein Dienst angehalten."
+    exit 1
+fi
 # Rueckfall, falls sudo die Umgebung ausgeraeumt hat (env_reset).
-# Das fuenfte Argument ist das Wurzelverzeichnis und traegt immer.
-LBHOMEDIR="${LBHOMEDIR:-$5}"
-LBPCONFIG="${LBPCONFIG:-$5/config/plugins}"
-LBPLOG="${LBPLOG:-$5/log/plugins}"
+LBPCONFIG="${LBPCONFIG:-$APC_BASE/config/plugins}"
+LBPLOG="${LBPLOG:-$APC_BASE/log/plugins}"
 # sudo -n -u loxberry setzt die Umgebung zurueck - ohne diesen
 # Rueckfall zeigte $LBPDATA ins Nichts und der Pfad auf /<ordner>.
-LBPDATA="${LBPDATA:-$5/data/plugins}"
-#LBHOMEDIR=$5 # Comes from /etc/environment now.
+LBPDATA="${LBPDATA:-$APC_BASE/data/plugins}"
 
 PLOG=$LBPLOG/$PDIR
 PCONFIG=$LBPCONFIG/$PDIR
@@ -25,7 +62,6 @@ PCONFIG=$LBPCONFIG/$PDIR
 # juenger als eine Stunde ist, startet der Waechter nichts; postupgrade.sh
 # entfernt sie und startet den Dienst selbst. Sie liegt NEBEN dem
 # Datenordner, weil purge_installation den Ordner selbst loescht.
-APC_BASE="${5:-$LBHOMEDIR}"
 APC_PDIR="${3:-apc_ups_ng}"
 MARKE="$APC_BASE/data/plugins/$APC_PDIR.upgrade_laeuft"
 mkdir -p "$APC_BASE/data/plugins" 2>/dev/null
@@ -245,7 +281,7 @@ WAISEN=$(apc_dienste_beenden "$APC_DIENST" "$APC_UID")
 # an postupgrade.sh. Laeuft das aus irgendeinem Grund nicht durch, greift
 # jetzt postinstall.sh auf diese Zweitschrift zu - sie liegt ausserhalb des
 # ueberschriebenen Ordners und wird vom Installer nicht angefasst.
-NETZ_BASE="${5:-$LBHOMEDIR}"
+NETZ_BASE="$APC_BASE"
 NETZ_PDIR="${3:-apc_ups_ng}"
 NETZ_CFG="$NETZ_BASE/config/plugins/$NETZ_PDIR"
 NETZ_ZWEIT="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.apc_ups_ng.cfg"

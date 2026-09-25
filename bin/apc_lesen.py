@@ -14,6 +14,9 @@ Aufrufformen:
                               Schluessel als JSON - damit der Reiter Test
                               gegenpruefen kann, ob apc_themen.json, die
                               Berechnung und die Oberflaeche dasselbe meinen
+    apc_lesen.py --mqtt-leeren
+                              die behaltenen Themen dieser Linie im Broker
+                              loeschen und nachlesen - fuer uninstall/uninstall
 """
 
 import json
@@ -44,10 +47,58 @@ def themenbericht():
     }
 
 
+def mqtt_leeren():
+    """Behaltene Themen der Linie im Broker leeren - fuer die Deinstallation.
+
+    Wer das Plugin entfernt, soll keine behaltenen Werte zuruecklassen
+    (Regeln/07; Muster 6 der Nachlese). Bis 1.2.12 raeumte uninstall nichts
+    ab: Zustand, Modell, Seriennummer und das letzte Ereignis standen danach
+    fuer immer im Broker, und nach jedem Neustart von Broker oder Gateway
+    bekam der Miniserver sie als frische Werte (in WSL gemessen,
+    Pruefung-APC-UPS-1.2.13, Fall U1).
+
+    Geleert wird NUR, was diese Linie sendet: das Praefix aus der
+    Konfiguration und darunter genau die Namen aus apc_themen.json samt den
+    frueher behaltenen (apc_common.ALTLAST). Ein fremdes Thema unter
+    demselben Praefix bleibt stehen. Am Broker mit Nachlesen; CONNACK
+    ungleich 0 und SUBACK 0x80 heissen "nicht zu fragen", nie "nichts da".
+    Rueckgabe: 0 geleert oder nichts behalten, 1 es blieb etwas stehen,
+    2 nicht zu fragen oder nicht zulaessig.
+    """
+    if gem.ARCHIVMODUS:
+        sys.stdout.write("<WARNING> " + gem.archiv_meldung("apc_lesen.py --mqtt-leeren"))
+        return 2
+    cfg, _alt = gem.konfiguration_lesen()
+    praefix = str(cfg.get("themenpraefix") or "apcups").strip("/") or "apcups"
+    eigene = set(gem.themen_schluessel()) | set(gem.ALTLAST)
+
+    def auswahl(thema):
+        return thema.startswith(praefix + "/") and thema[len(praefix) + 1:] in eigene
+
+    erg = gem.broker_leeren(praefix, auswahl, warten=3.0)
+    if erg["rc"] == 2:
+        print("<WARNING> MQTT: die behaltenen Themen unter {0}/ wurden nicht geleert - "
+              "{1}.".format(praefix, erg["grund"]))
+        return 2
+    if erg["rc"] == 1:
+        print("<WARNING> MQTT: {0} von {1} behaltenen Themen unter {2}/ stehen noch im "
+              "Broker, zum Beispiel {3}.".format(len(erg["rest"]), len(erg["geleert"]),
+                                                 praefix, erg["rest"][0]))
+        return 1
+    if erg["geleert"]:
+        print("<OK> MQTT: {0} behaltene Themen unter {1}/ geleert und nachgelesen.".format(
+            len(erg["geleert"]), praefix))
+    else:
+        print("<INFO> MQTT: unter {0}/ lag nichts behalten - nichts zu leeren.".format(praefix))
+    return 0
+
+
 def main():
     if "--themen" in sys.argv[1:]:
         print(json.dumps(themenbericht(), ensure_ascii=False))
         return
+    if "--mqtt-leeren" in sys.argv[1:]:
+        sys.exit(mqtt_leeren())
 
     cfg, _alt = gem.konfiguration_lesen()
     try:

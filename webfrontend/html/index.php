@@ -72,13 +72,22 @@ $start = microtime(true);
  * webfrontend/htmlauth/ einbinden: auf dem installierten LoxBerry sind das
  * zwei getrennte Verzeichnisbaeume, und der require ginge ins Leere.
  * Deshalb steht die kleine Pfadsuche hier noch einmal.
+ *
+ * Wurzel ist, was config/plugins, data/plugins UND config/system/general.json
+ * traegt (Regeln/06); bis 1.2.12 genuegten config/plugins und webfrontend,
+ * und ein fremder Baum wurde zur Wurzel.
  */
 if (!function_exists('apc_wurzel')) {
     function apc_wurzel()
     {
+        $h = getenv('LBHOMEDIR');
+        if ($h && is_dir($h . '/config/plugins') && is_dir($h . '/data/plugins')) {
+            return rtrim($h, '/');
+        }
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/data/plugins')
+                && is_file($d . '/config/system/general.json')) {
                 return $d;
             }
             $eltern = dirname($d);
@@ -89,25 +98,35 @@ if (!function_exists('apc_wurzel')) {
     }
 }
 
-/** Ordnername des Plugins - so heisst er auch unter config/plugins/. */
+/** Ordnername des Plugins - so heisst er auch unter config/plugins/.
+ *  '' heisst: kein Pluginordner (ausgepacktes Archiv, dort heisst der
+ *  Ablageort html). Von LBPPLUGINDIR zaehlt nur der letzte Teil. */
 function apc_ordner()
 {
-    $dir = getenv('LBPPLUGINDIR');
-    return $dir ? $dir : basename(__DIR__);
+    $kein = array('', '.', '/', 'html', 'htmlauth', 'bin', 'plugins');
+    $dir = basename(rtrim((string) getenv('LBPPLUGINDIR'), '/'));
+    if (!in_array($dir, $kein, true)) {
+        return $dir;
+    }
+    $dir = basename(__DIR__);
+    return in_array($dir, $kein, true) ? '' : $dir;
 }
 
-/** Die eingestellten Werte. Nur die, die hier gebraucht werden. */
+/** Die eingestellten Werte. Nur die, die hier gebraucht werden.
+ *
+ * Gelesen wird nur die Konfiguration des EIGENEN Ordners. Bis 1.2.12 stand
+ * dahinter ein Rueckfall auf den festen Namen apc_ups_ng: aus einem Archiv
+ * unter einer echten Wurzel las diese Seite die Konfiguration der Anlage und
+ * fragte deren USV ab (in WSL gemessen, Pruefung-APC-UPS-1.2.13, Fall O9;
+ * Regeln/06, "Ein Rueckfall auf den vorgesehenen Ordnernamen"). */
 function apc_konfig()
 {
     $aus = array('host' => '');
-    $home = getenv('LBHOMEDIR');
-    if (!$home) {
-        $home = apc_wurzel();
-    }
+    $home = apc_wurzel();
+    $ordner = apc_ordner();
     $kandidaten = array();
-    if ($home) {
-        $kandidaten[] = $home . '/config/plugins/' . apc_ordner() . '/apc_ups_ng.cfg';
-        $kandidaten[] = $home . '/config/plugins/apc_ups_ng/apc_ups_ng.cfg';
+    if ($home !== '' && $ordner !== '') {
+        $kandidaten[] = $home . '/config/plugins/' . $ordner . '/apc_ups_ng.cfg';
     }
     foreach ($kandidaten as $datei) {
         if (!is_file($datei)) {
@@ -206,7 +225,12 @@ if ($cfg['host'] !== '' && preg_match('/^[A-Za-z0-9._-]+(:[0-9]{1,5})?$/', $cfg[
 
 $result = array();
 $retval = 0;
-@exec($befehl . ' 2>&1', $result, $retval);
+// Mit Zeitgrenze: bis 1.2.12 lief apcaccess hier ohne jede Grenze, und ein
+// haengender apcupsd hielt die Seite - und damit die Abfrage des
+// Miniservers - fest, bis er von selbst antwortete (in WSL gemessen,
+// Pruefung-APC-UPS-1.2.13, Fall T3: 117 s). Nach 20 s SIGTERM, nach weiteren
+// 5 s SIGKILL; die Rueckgabe 124 bzw. 137 steht dann als errorcode da.
+@exec('timeout -k 5 20 ' . $befehl . ' 2>&1', $result, $retval);
 
 if ($retval != 0) {
     echo " <error>Die USV antwortet nicht</error>\n";

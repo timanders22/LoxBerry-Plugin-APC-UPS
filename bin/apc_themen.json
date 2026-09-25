@@ -28,9 +28,16 @@
     "         Teil des Lebenszeichens ist). Zurueckbehalten sagte es immer",
     "         'lebt' - auch fuer einen Dienst, der seit Tagen steht. Wie",
     "         frisch ein Wert ist, beantwortet timestamp, und der muss",
-    "         dafuer selbst frisch sein."
+    "         dafuer selbst frisch sein.",
+    "         Nie retained ist auch, was der DIENST ueber sich selbst sagt",
+    "         (valid: hat die eigene apcaccess-Abfrage geklappt?, last_error),",
+    "         und ein Alter (battery_age_months: allein durch die Uhr",
+    "         falsch) - beides seit Fassung 4 der Liste (Regeln/07,",
+    "         Entscheidungen 18., 19. und 24.09.2026). comm_lost und",
+    "         data_valid bleiben retained: das stellt apcupsd ueber die USV",
+    "         fest, nicht der Dienst ueber sich."
   ],
-  "fassung": 3,
+  "fassung": 4,
   "themen": [
     { "schluessel": "status",                "art": "text",    "einheit": "",    "min": null, "max": null,       "retain": true  },
     { "schluessel": "data_valid",            "art": "digital", "einheit": "",    "min": 0,    "max": 1,          "retain": true  },
@@ -51,7 +58,7 @@
     { "schluessel": "nominal_battery_volt",  "art": "analog",  "einheit": "V",   "min": 0,    "max": 300,        "retain": true  },
     { "schluessel": "internal_temp",         "art": "analog",  "einheit": "°C", "min": -20, "max": 100,     "retain": false },
     { "schluessel": "replace_battery",       "art": "digital", "einheit": "",    "min": 0,    "max": 1,          "retain": true  },
-    { "schluessel": "battery_age_months",    "art": "analog",  "einheit": "Mon", "min": 0,    "max": 600,        "retain": true  },
+    { "schluessel": "battery_age_months",    "art": "analog",  "einheit": "Mon", "min": 0,    "max": 600,        "retain": false },
     { "schluessel": "self_test_result",      "art": "text",    "einheit": "",    "min": null, "max": null,       "retain": true  },
     { "schluessel": "self_test_interval",    "art": "text",    "einheit": "",    "min": null, "max": null,       "retain": true  },
     { "schluessel": "time_on_battery",       "art": "analog",  "einheit": "s",   "min": 0,    "max": 86400,      "retain": false },
@@ -66,7 +73,7 @@
     { "schluessel": "serial",                "art": "text",    "einheit": "",    "min": null, "max": null,       "retain": true  },
     { "schluessel": "battery_date",          "art": "text",    "einheit": "",    "min": null, "max": null,       "retain": true  },
     { "schluessel": "timestamp",             "art": "analog",  "einheit": "s",   "min": 0,    "max": 4102444800, "retain": false },
-    { "schluessel": "valid",                 "art": "digital", "einheit": "",    "min": 0,    "max": 1,          "retain": true  },
+    { "schluessel": "valid",                 "art": "digital", "einheit": "",    "min": 0,    "max": 1,          "retain": false },
     { "schluessel": "service/online",        "art": "digital", "einheit": "",    "min": 0,    "max": 1,          "retain": false },
     { "schluessel": "event",                 "art": "text",    "einheit": "",    "min": null, "max": null,       "retain": true  },
     { "schluessel": "last_error",            "art": "text",    "einheit": "",    "min": null, "max": null,       "retain": false }

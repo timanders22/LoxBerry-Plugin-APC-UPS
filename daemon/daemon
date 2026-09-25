@@ -18,6 +18,9 @@ logdir=REPLACELBPLOGDIR
 log=$logdir/apc_ups_ng.log
 cfgdatei=REPLACELBPCONFIGDIR/apc_ups_ng.cfg
 marke=REPLACELBPDATADIR.upgrade_laeuft
+# Der Anhaltemerker des Knopfs "Dienst anhalten" (Reiter Test); er liegt
+# NEBEN dem Datenordner und uebersteht damit jedes Update.
+angehalten=REPLACELBPDATADIR.angehalten
 dienst=$pluginbindir/apc_service.py
 
 if [ -x /usr/bin/logger ]; then
@@ -87,12 +90,21 @@ apc_dienste_suchen() {
 # fuehrt, wurde nicht beachtet (1 statt 0). Die drei Fragen sind dieselben
 # wie im Waechter cron/cron.05min; Bauart nach Chromecast4lox 1.3.11.
 
-# 1. Ist das Plugin ausgeschaltet, wird nichts gestartet. Der Knopf
-#    "Dienst anhalten" im Reiter Test setzt enabled=0; ein Start dagegen
-#    waere das Gegenteil dessen, was der Anwender eingestellt hat
-#    (CLAUDE.md §4: bewusst angehalten bleibt angehalten).
+# 1. Ist das Plugin ausgeschaltet (Haken "Plugin eingeschaltet" im Reiter
+#    Einstellungen, enabled=0) oder mit dem Knopf "Dienst anhalten" im
+#    Reiter Test angehalten (Merker <Datenordner>.angehalten), wird nichts
+#    gestartet: ein Start waere das Gegenteil dessen, was der Anwender
+#    eingestellt hat (CLAUDE.md §4: bewusst angehalten bleibt angehalten).
+#    Bis 1.2.12 stand hier, der Knopf setze enabled=0 - das tat er nie; er
+#    beendete nur den Prozess, und der naechste Systemstart (und binnen
+#    fuenf Minuten der Waechter) startete ihn wieder (in WSL gemessen,
+#    Pruefung-APC-UPS-1.2.13, Faelle S1, S2).
 if [ -f "$cfgdatei" ] && grep -q '^enabled=0' "$cfgdatei"; then
     apc_melden "Start uebersprungen: enabled=0 - der Dienst ist bewusst angehalten."
+    exit 0
+fi
+if [ -f "$angehalten" ]; then
+    apc_melden "Start uebersprungen: mit dem Knopf Dienst anhalten angehalten (Dienst neu starten im Reiter Test startet ihn wieder)."
     exit 0
 fi
 
@@ -104,7 +116,7 @@ fi
 #    nicht gebraucht.
 #    Nur eine Marke zaehlt, die hoechstens eine Stunde alt ist: eine
 #    abgebrochene Installation darf den Dienst nicht fuer immer stilllegen.
-#    Aelter, aus der Zukunft oder unlesbar - sie gilt nicht.
+#    Aelter, mehr als 300 s aus der Zukunft oder unlesbar - sie gilt nicht.
 if [ -f "$marke" ]; then
     seit=$(cat "$marke" 2>/dev/null)
     case "$seit" in ''|*[!0-9]*) seit=0 ;; esac
@@ -121,7 +133,12 @@ if [ -f "$marke" ]; then
         exit 0
     fi
     alter=$(( jetzt - seit ))
-    if [ "$alter" -ge 0 ] && [ "$alter" -lt 3600 ]; then
+    # 300 s Vorlauf: eine Marke bis fuenf Minuten "aus der Zukunft" ist eine
+    # nachgestellte Uhr (NTP nach dem Hochfahren), kein Grund, die Sperre zu
+    # verwerfen. Bis 1.2.12 stand hier -ge 0, und eine um zwei Minuten
+    # zurueckgestellte Uhr hob die Sperre auf (in WSL gemessen,
+    # Pruefung-APC-UPS-1.2.13, Fall M2). Bauart Sprachsteuerung 0.11.9.
+    if [ "$alter" -ge -300 ] && [ "$alter" -lt 3600 ]; then
         apc_melden "Start uebersprungen: eine Aktualisierung dieses Plugins laeuft."
         exit 0
     fi

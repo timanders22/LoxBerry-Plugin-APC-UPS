@@ -4,6 +4,96 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.13
+
+**Zwei Themen gehen nicht mehr zurückbehalten hinaus.** `<Präfix>/valid`
+sagt, ob die *eigene* Abfrage des Dienstes (`apcaccess`) geklappt hat — eine
+Aussage des Dienstes über sich selbst. Stirbt der Dienst, bliebe die letzte 1
+im Broker stehen, und nach einem Neustart von Broker oder Gateway läse Loxone
+„Abfrage in Ordnung" von einem Dienst, der nicht mehr läuft. Ebenso
+`<Präfix>/battery_age_months`: ein Alter wird allein durch die Uhr falsch.
+Beide gehen jetzt flüchtig hinaus; nach einem Neustart von Broker oder
+Gateway fehlen sie bis zum nächsten Abfragetakt. **Unverändert retained**
+bleiben `comm_lost` und `data_valid`: das stellt `apcupsd` über die USV
+fest, nicht der Dienst über sich. Damit sind 20 der 38 Themen retained.
+
+**Altwerte werden am Broker abgeräumt — und nachgelesen.** Wer von einer
+früheren Fassung kommt, hat `valid`, `battery_age_months`, `service/online`
+und `timestamp` noch zurückbehalten im Broker stehen. Der Dienst meldet sich
+dafür einmal kurz mit einer eigenen Verbindung am Broker an, löscht nur, was
+dort wirklich liegt, sendet unmittelbar danach den gültigen Wert und liest
+nach; erst dann setzt er seinen Merker. Weist der Broker die Anmeldung oder
+das Abonnement ab, gilt das als „nicht zu fragen" — kein Merker, ein neuer
+Versuch nach zehn Minuten, eine Zeile im Protokoll. Bis 1.2.12 wurden nur
+zwei Themen gelöscht, und zwar gleich nach dem Verbindungsaufbau, noch vor
+der Antwort des Brokers; der Merker fiel auf das bloße Absenden, auch bei
+einem abgewiesenen Kennwort.
+
+**Die Deinstallation räumt den Broker ab.** Bis 1.2.12 blieben Zustand,
+Modell, Seriennummer und das letzte Ereignis nach dem Entfernen für immer im
+Broker stehen. Jetzt löscht `uninstall` die zurückbehaltenen Themen der Linie
+(nur die eigenen Namen unter dem eingestellten Präfix) und liest nach. Ein
+Leeren, das hängt, wird nach 60 s beendet, notfalls hart, und steht dann als
+Warnung im Protokoll.
+
+**Nach einer Neuverbindung stand `service/online` auf 0.** Reißt die
+Verbindung zum Broker ab, stellt der Broker den Letzten Willen `0` zu, und
+paho verbindet selbst neu. Bis 1.2.12 ging `service/online=1` aber nur beim
+allerersten Verbinden hinaus — Loxone zeigte den Dienst danach als tot, bis
+er neu gestartet wurde, und die unveränderten Zustände kamen erst mit der
+nächsten Vollmeldung. Jetzt geht nach jeder Anmeldung `1` hinaus und sofort
+ein Vollversand.
+
+**Ein ausgepacktes Archiv wirkt nicht mehr auf die Anlage.** Lag das
+entpackte Plugin unterhalb einer echten LoxBerry-Wurzel, nahmen Oberfläche,
+Dienst und Hilfsprogramme deren Konfiguration, Dienst und
+Benachrichtigungsbereich: „Dienst anhalten" im Reiter Test beendete den
+Dienst der Anlage. Die Pfade der Anlage gelten jetzt nur noch, wenn die
+Datei dort installiert liegt oder `LBHOMEDIR` und `LBPPLUGINDIR` ausdrücklich
+gesetzt sind; sonst bleibt alles im eigenen Ordner, und Dienst- und
+Meldeknöpfe sagen, warum sie nichts tun. Eine Zweitinstallation
+(`apc_ups_ng01`) verwaltet jetzt ihre eigene Konfiguration statt der der
+ersten.
+
+**„Dienst anhalten" hält den Dienst jetzt wirklich an.** Der Knopf im Reiter
+Test beendete bisher nur den Prozess: der Wächter startete ihn binnen fünf
+Minuten wieder, ebenso der nächste Neustart des LoxBerry und jedes Speichern
+der Einstellungen. Jetzt legt der Knopf einen Merker neben den Datenordner
+(`data/plugins/<ordner>.angehalten`, er übersteht damit auch eine
+Aktualisierung), und Wächter, Systemstart, Aktualisierung und Speichern
+lassen den Dienst aus, bis „Dienst neu starten" gedrückt wird. Der Reiter
+Test zeigt einen so angehaltenen Dienst als Hinweis statt als Fehler, und die
+Deinstallation räumt den Merker weg. Der Haken „Plugin eingeschaltet" im
+Reiter Einstellungen wirkt wie bisher.
+
+**Die LoxBerry-Wurzel wird gelesen, nicht geraten.** Wurzel ist, was
+`config/plugins`, `data/plugins` und `config/system/general.json` trägt.
+Bis 1.2.12 genügte an vier Stellen „`config/plugins` und `webfrontend`",
+und die Hakenskripte rechneten ohne fünftes Argument mit Pfaden ab der
+Laufwerkswurzel (`/data/plugins`, `/log/plugins`). Ohne Wurzel warnen sie
+jetzt und tun nichts.
+
+**Kleinere Punkte.** Die Marke „Aktualisierung läuft" gilt auch, wenn sie
+bis zu fünf Minuten „aus der Zukunft" stammt (eine nachgestellte Uhr hob
+die Sperre sonst auf). `postinstall.sh` spielt eine Zweitschrift nur ein,
+wenn sie selbst einen vollständigen Stand trägt, und meldet es erst nach dem
+Nachsehen. Die Knöpfe im Reiter Test und der XML-Endpunkt brechen eine
+hängende Abfrage nach 20 bzw. 30 s ab, notfalls hart (`timeout -k`); der
+XML-Endpunkt rief `apcaccess` bisher ganz ohne Zeitgrenze. Ein Brokerport
+in `general.json`, der 0 oder keine Zahl ist, beendete den Dienst mit
+„Unerwarteter Fehler"; jetzt steht er im Protokoll, und der Dienst läuft
+weiter.
+
+In Loxone ändert sich nichts an Namen oder Bausteinen: kein Thema fällt weg
+oder wird umbenannt. In der Loxone-Projektdatei der Anlage, an der das
+Plugin gepflegt wird, hängt an keinem Thema der Linie ein Baustein.
+
+Gemessen in WSL mit echtem paho 1.6.1 gegen einen eigenen Broker, der das
+Retain-Bit jedes empfangenen Pakets aufschreibt, nicht am Gerät:
+`Pruefung-APC-UPS-1.2.13/` — vier Prüfstände mit 38, 52, 7 und 13 Zeilen;
+vor der Änderung 20, 38, 4 und 8 rot, danach 0. Jede Behebung einzeln
+zurückgebaut (42 Rückbauten), jede an ihrer Zeile rot.
+
 ## Neu in 1.2.12
 
 **Die Sicherung wurde gelöscht, bevor die neue stand.** `preupgrade.sh`
@@ -619,7 +709,7 @@ lief bis 1.1.6 auseinander.
 | `<Präfix>/nominal_battery_volt` | analog | V | ja | Akku-Nennspannung |
 | `<Präfix>/internal_temp` | analog | °C | nein | Innentemperatur |
 | `<Präfix>/replace_battery` | digital | — | ja | Akkutausch fällig |
-| `<Präfix>/battery_age_months` | analog | Mon | ja | Akkualter |
+| `<Präfix>/battery_age_months` | analog | Mon | nein | Akkualter |
 | `<Präfix>/self_test_result` | text | — | ja | Letzter Selbsttest |
 | `<Präfix>/self_test_interval` | text | — | ja | Selbsttest-Abstand |
 | `<Präfix>/time_on_battery` | analog | s | nein | Zeit im Akkubetrieb |
@@ -634,12 +724,12 @@ lief bis 1.1.6 auseinander.
 | `<Präfix>/serial` | text | — | ja | Seriennummer |
 | `<Präfix>/battery_date` | text | — | ja | Akku eingebaut am |
 | `<Präfix>/timestamp` | analog | s | nein | Zeitpunkt der Messung |
-| `<Präfix>/valid` | digital | — | ja | Letzte Abfrage brauchbar |
+| `<Präfix>/valid` | digital | — | nein | Letzte Abfrage brauchbar |
 | `<Präfix>/service/online` | digital | — | nein | Dienst läuft |
 | `<Präfix>/event` | text | — | ja | Letztes Ereignis |
 | `<Präfix>/last_error` | text | — | nein | Letzte Fehlermeldung |
 
-Voreingestelltes Präfix: `apcups`. **Nicht alle Themen sind retained** — 22 von 38 sind es. Zustände bleiben im Broker liegen,
+Voreingestelltes Präfix: `apcups`. **Nicht alle Themen sind retained** — 20 von 38 sind es. Zustände bleiben im Broker liegen,
 Messwerte nicht: wer sich nach einer Stunde neu verbindet, bekäme sonst
 eine stundenalte Restlaufzeit serviert und hielte sie für aktuell. Wie
 frisch ein Wert ist, sagt `<Präfix>/timestamp`.

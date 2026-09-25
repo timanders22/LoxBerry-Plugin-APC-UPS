@@ -58,6 +58,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import apc_common as gem   # noqa: E402
 
+# Aus einem ausgepackten Archiv startet der Dienst nicht - VOR allem, was
+# schreibt (Protokollordner, PID-Datei, Zustandsdatei). Bis 1.2.12 lief er
+# dort los und nahm, lag das Archiv unter einer echten Wurzel, Konfiguration
+# und Protokoll der Anlage (in WSL gemessen, Pruefung-APC-UPS-1.2.13, Fall
+# P4). Was "Archiv" heisst, entscheidet apc_common (ARCHIVMODUS).
+if __name__ == "__main__" and gem.ARCHIVMODUS:
+    sys.stderr.write(gem.archiv_meldung("apc_service.py"))
+    sys.exit(1)
+
 # Nur in die Datei protokollieren.
 #
 # Ein zweiter Kanal auf stdout schriebe jede Zeile ein zweites Mal in
@@ -156,19 +165,12 @@ class Mqtt:
     WARTE_MIN = 60
     WARTE_MAX = 300
 
-    # Themen, die bis 1.2.9 zurueckbehalten hinausgingen, obwohl sie zum
-    # Lebenszeichen gehoeren. Regeln/07: "Zustaende retained, Messwerte mit
-    # Zeitbezug nicht, das Lebenszeichen nie" - zurueckbehalten zeigte es
-    # immer "lebt", auch fuer einen Dienst, der seit Tagen steht.
-    #
-    # Auf jeder bestehenden Anlage liegt der Altwert im Broker und bliebe
-    # dort, bis ihn jemand von Hand loescht. Er wird deshalb einmal mit
-    # LEERER Nutzlast und retain geloescht - so loescht ein Broker ein
-    # zurueckbehaltenes Thema (Regeln/07, an diesem Broker gemessen
-    # 14.09.2026). Danach geht sofort der gueltige Wert hinaus: das
-    # MQTT-Gateway reicht eine leere Nutzlast als leeren Wert an den
-    # Miniserver weiter.
-    ALTLAST = ("service/online", "timestamp")
+    # Die zurueckbehaltenen Altwerte frueherer Fassungen raeumt seit 1.2.13
+    # Dienst._altlast() ab - am Broker, mit Nachlesen, Merker erst danach.
+    # Bis 1.2.12 stand hier _altlast_raeumen(): zwei leere retain-Nachrichten
+    # gleich nach connect(), also VOR dem CONNACK, und der Merker fiel auf das
+    # blosse Absenden - auch bei abgewiesener Anmeldung (in WSL gemessen,
+    # Pruefung-APC-UPS-1.2.13, Faelle A6 bis A8).
 
     def __init__(self, praefix):
         self.praefix = praefix
@@ -177,6 +179,11 @@ class Mqtt:
         self.naechster_versuch = 0
         self.warte = self.WARTE_MIN
         self.retain = gem.retain_themen()
+        # Angenommene Anmeldungen (CONNACK 0) dieses Clients und das Zeichen
+        # an die Hauptschleife, dass paho von selbst neu verbunden hat.
+        self.anmeldungen = 0
+        self.neu_verbunden = threading.Event()
+        self._letzter_rc = None
 
     def start(self, leise=False):
         """Verbindung aufbauen. Rueckgabe: True, wenn sie steht."""
@@ -199,9 +206,9 @@ class Mqtt:
         # die Fehlerausgabe - die landet ueber die Umleitung des
         # Startskripts mitten im Protokoll:
         #     DeprecationWarning: Callback API version 1 is deprecated
-        # Dieses Plugin setzt gar keine Rueckrufe (nur publish, will_set,
-        # connect, loop_start); zwischen den Fassungen unterscheidet sich
-        # nur die Signatur der Rueckrufe. VERSION2 ist damit unbedenklich.
+        # Gesetzt wird ein einziger Rueckruf, on_connect; er sucht den
+        # Rueckgabecode an der Stelle, an der ihn alle Fassungen tragen
+        # (_bei_verbindung). VERSION2 ist damit unbedenklich.
         client = None
         for art in ('VERSION2', 'VERSION1'):
             wert = getattr(getattr(mqtt, 'CallbackAPIVersion', None), art, None)
@@ -223,9 +230,14 @@ class Mqtt:
         # und ein Abnehmer, der sich Tage spaeter verband, bekam sie als
         # aktuelle Aussage ueber einen laengst wieder laufenden Dienst.
         client.will_set(self.praefix + "/service/online", "0", retain=False)
+        client.on_connect = self._bei_verbindung
         try:
             client.connect(zugang["host"], zugang["port"], keepalive=60)
-        except OSError as fehler:
+        except (OSError, ValueError) as fehler:
+            # ValueError: paho weist einen ungueltigen Port (0, ueber 65535)
+            # so ab. Bis 1.2.12 stand hier nur OSError, und ein Brokerport 0
+            # in general.json beendete den Dienst mit "Unerwarteter Fehler"
+            # (in WSL gemessen, Pruefung-APC-UPS-1.2.13, Fall D1).
             if not leise:
                 log.error("MQTT-Broker %s:%s nicht erreichbar: %s",
                           zugang["host"], zugang["port"], fehler)
@@ -236,45 +248,42 @@ class Mqtt:
         self.warte = self.WARTE_MIN
         log.info("MQTT verbunden mit %s:%s, Themenpraefix %s",
                  zugang["host"], zugang["port"], self.praefix)
-        self._altlast_raeumen()
-        self.senden("service/online", "1")
+        # service/online=1 geht aus _bei_verbindung() hinaus - erst nach dem
+        # CONNACK, und nach jeder Neuverbindung wieder.
         return True
 
-    def _altlast_raeumen(self):
-        """Die zurueckbehaltenen Altwerte des Lebenszeichens einmal loeschen.
+    def _bei_verbindung(self, _k, _d, _f, *rest):
+        """Jede angenommene Anmeldung - die erste wie jede Neuverbindung.
 
-        Gilt fuer eine Anlage, die von 1.2.9 oder frueher kommt: dort stehen
-        <praefix>/service/online und <praefix>/timestamp zurueckbehalten im
-        Broker. Geloescht wird mit leerer Nutzlast und retain; der gueltige
-        Wert geht unmittelbar danach hinaus (der Aufrufer sendet
-        service/online, den Zeitstempel schickt der erste Durchgang).
+        paho verbindet nach einem Abriss selbst neu (loop_start), und der
+        Broker hat dann den Letzten Willen service/online=0 zugestellt. Bis
+        1.2.12 ging service/online=1 nur einmal nach connect() hinaus: nach
+        jeder Neuverbindung blieb in Loxone die 0 stehen, und der Vollversand,
+        den Regeln/07 nach einer Verbindung verlangt, blieb aus. In WSL
+        gemessen (Pruefung-APC-UPS-1.2.13, Fall W): nach einer vom Broker
+        getrennten Verbindung kam binnen 15 s weder service/online 1 noch ein
+        unveraenderter Zustandswert.
 
-        Der Merker liegt im Datenordner. Der ueberlebt ein Upgrade nicht -
-        das ist hier kein Versehen: nach einem Upgrade zwei Nachrichten mehr
-        zu senden kostet nichts, und ein Praefix, das seit dem letzten Mal
-        gewechselt hat, wird dadurch mit abgeraeumt.
+        Der Rueckgabecode steht unter paho 1.x und VERSION1 als Zahl, unter
+        VERSION2 als ReasonCode an derselben Stelle (Regeln/07); gesucht wird
+        er dort, der Rest wird nicht abgezaehlt.
         """
-        if not self.client or os.path.exists(gem.RETAIN_MERKER):
-            return
-        for unterthema in self.ALTLAST:
-            try:
-                self.client.publish(self.praefix + "/" + unterthema, "",
-                                    qos=0, retain=True)
-            except Exception as fehler:  # noqa: BLE001
-                log.error("Zurueckbehaltener Altwert %s nicht geloescht: %s",
-                          unterthema, fehler)
-                return
-        log.info("Zurueckbehaltene Altwerte des Lebenszeichens geloescht: %s",
-                 ", ".join(self.praefix + "/" + u for u in self.ALTLAST))
         try:
-            if not os.path.isdir(os.path.dirname(gem.RETAIN_MERKER)):
-                os.makedirs(os.path.dirname(gem.RETAIN_MERKER))
-            with open(gem.RETAIN_MERKER, "w", encoding="utf-8") as fh:
-                fh.write("{0} {1}\n".format(int(time.time()), self.praefix))
-        except OSError as fehler:
-            log.warning("Merker %s nicht schreibbar (%s) - die Altwerte "
-                        "werden beim naechsten Start noch einmal geloescht.",
-                        gem.RETAIN_MERKER, fehler)
+            rc = int(getattr(rest[0], "value", rest[0]) or 0) if rest else 0
+        except (TypeError, ValueError):
+            rc = 0
+        if rc != 0:
+            if rc != self._letzter_rc:
+                log.error("MQTT: der Broker hat die Anmeldung abgewiesen (CONNACK %d: %s).",
+                          rc, gem.CONNACK_TEXT.get(rc, "unbekannter Grund"))
+            self._letzter_rc = rc
+            return
+        self._letzter_rc = 0
+        self.anmeldungen += 1
+        self.senden("service/online", "1")
+        if self.anmeldungen > 1:
+            log.info("MQTT neu verbunden - service/online und alle Werte gehen neu hinaus.")
+            self.neu_verbunden.set()
 
     def nachfassen(self):
         """Steht die Verbindung nicht, es spaeter noch einmal versuchen.
@@ -399,6 +408,76 @@ class Dienst:
         # Womit die bestehende MQTT-Verbindung aufgebaut wurde; gesetzt in
         # start(), verglichen nach jedem Neueinlesen.
         self._mqtt_stand = None
+        # Altlast-Abraeumen (_altlast): fuer welche Kennung in diesem Lauf
+        # erledigt, und wann der naechste Versuch faellig ist.
+        self._altlast_erledigt = ""
+        self._altlast_naechster = 0.0
+
+    def _altlast(self):
+        """Zurueckbehaltene Altwerte frueherer Fassungen einmal abraeumen.
+
+        Welche Themen, steht in apc_common.ALTLAST: das Lebenszeichen (bis
+        1.2.9 retained), valid und battery_age_months (bis 1.2.12). Sie gehen
+        heute fluechtig hinaus; ein Altwert im Broker bliebe sonst fuer immer
+        stehen und kaeme nach jedem Neustart von Broker oder Gateway als
+        frische Aussage beim Miniserver an.
+
+        Am Broker, nicht blind (apc_common.broker_leeren): geloescht wird nur,
+        was wirklich behalten liegt, danach wird NACHGELESEN, und erst dann
+        faellt der Merker. CONNACK ungleich 0 und SUBACK 0x80 heissen "nicht
+        zu fragen" - kein Merker, ein neuer Versuch nach zehn Minuten.
+        Unmittelbar nach der Loeschung geht der gueltige Wert hinaus
+        (fluechtig): das MQTT-Gateway reicht die Loeschung als leeren Wert an
+        den Miniserver weiter.
+        """
+        if self.cfg.get("mqtt", "1") != "1" or not self.mqtt.client:
+            return
+        praefix = self.praefix
+        kennung = gem.altlast_kennung(praefix)
+        if self._altlast_erledigt == kennung:
+            return
+        if gem.altlast_merker_lesen() == kennung:
+            self._altlast_erledigt = kennung
+            return
+        jetzt = time.time()
+        if jetzt < self._altlast_naechster:
+            return
+        self._altlast_naechster = jetzt + 600
+
+        def auswahl(thema):
+            return (thema.startswith(praefix + "/")
+                    and thema[len(praefix) + 1:] in gem.ALTLAST)
+
+        def gueltig_hinterher(geleert):
+            # Unmittelbar nach der Loeschung, noch vor dem Nachlesen.
+            for thema in geleert:
+                unter = thema[len(praefix) + 1:]
+                if unter == "service/online":
+                    self.mqtt.senden(unter, "1")
+                elif unter in self.letzter_stand:
+                    self.mqtt.senden(unter, self.letzter_stand[unter])
+
+        erg = gem.broker_leeren(praefix, auswahl, nach_loeschen=gueltig_hinterher)
+        if erg["rc"] == 0:
+            self._altlast_erledigt = kennung
+            self._gemeldet.pop("altlast", None)
+            if erg["geleert"]:
+                log.info("MQTT: %d zurueckbehaltene Altwerte frueherer Fassungen "
+                         "geloescht und nachgelesen (%s).", len(erg["geleert"]),
+                         ", ".join(erg["geleert"]))
+            if not gem.altlast_merker_schreiben(kennung):
+                log.warning("MQTT: der Merker %s liess sich nicht schreiben - nach dem "
+                            "naechsten Start wird noch einmal nachgelesen.",
+                            gem.ALTLAST_MERKER)
+            return
+        if erg["rc"] == 1:
+            text = ("MQTT: {0} zurueckbehaltene Altwerte stehen nach dem Loeschen noch "
+                    "im Broker (zum Beispiel {1}) - neuer Versuch in zehn Minuten."
+                    .format(len(erg["rest"]), erg["rest"][0]))
+        else:
+            text = ("MQTT: zurueckbehaltene Altwerte frueherer Fassungen nicht "
+                    "abgeraeumt - {0}. Neuer Versuch in zehn Minuten.".format(erg["grund"]))
+        self._einmal("altlast", text, "warning")
 
     def _mqtt_soll(self):
         """Was eine MQTT-Verbindung festlegt: Schalter, Praefix, Zugang.
@@ -684,12 +763,23 @@ class Dienst:
             if self.cfg.get("mqtt", "1") == "1" and self.mqtt.nachfassen():
                 self.letzter_stand.clear()
                 letzte_vollmeldung = 0
+            # Hat paho von selbst neu verbunden (_bei_verbindung), gilt
+            # dasselbe: der Vollversand geht jetzt hinaus, nicht erst mit der
+            # naechsten Vollmeldung.
+            if self.mqtt.neu_verbunden.is_set():
+                self.mqtt.neu_verbunden.clear()
+                self.letzter_stand.clear()
+                letzte_vollmeldung = 0
 
             if self.cfg.get("enabled", "1") == "1":
                 erzwingen = (time.time() - letzte_vollmeldung) >= vollmeldung_alle
                 self.durchgang(erzwingen=erzwingen)
                 if erzwingen:
                     letzte_vollmeldung = time.time()
+
+            # Nach dem Durchgang: dann kennt letzter_stand die gueltigen
+            # Werte, die unmittelbar nach einer Loeschung hinausgehen.
+            self._altlast()
 
             self._kappen()
 
@@ -716,7 +806,8 @@ class Dienst:
                     letzte_vollmeldung = 0
 
             ende = time.time() + intervall
-            while self.laeuft and time.time() < ende:
+            while (self.laeuft and time.time() < ende
+                   and not self.mqtt.neu_verbunden.is_set()):
                 time.sleep(min(1.0, max(0.05, ende - time.time())))
 
     def stop(self):

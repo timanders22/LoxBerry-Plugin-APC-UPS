@@ -51,7 +51,11 @@ if [ -f "$MARKE" ]; then
         exit 0
     fi
     ALTER=$(( JETZT - SEIT ))
-    if [ "$ALTER" -ge 0 ] && [ "$ALTER" -lt 3600 ]; then
+    # 300 s Vorlauf: bis fuenf Minuten "aus der Zukunft" ist eine
+    # nachgestellte Uhr, kein Grund, die Sperre zu verwerfen. Bis 1.2.12 stand
+    # hier -ge 0 (in WSL gemessen, Pruefung-APC-UPS-1.2.13, Fall M1: Marke
+    # 120 s voraus, Dienst gestartet). Dieselbe Stelle steht in daemon/daemon.
+    if [ "$ALTER" -ge -300 ] && [ "$ALTER" -lt 3600 ]; then
         exit 0
     fi
 fi
@@ -75,6 +79,16 @@ apc_ist_dienst() {
 # als keiner.
 CFG="REPLACELBPCONFIGDIR/apc_ups_ng.cfg"
 if [ -f "$CFG" ] && grep -q '^enabled=0' "$CFG"; then
+    exit 0
+fi
+# Ebenso, wenn der Dienst mit dem Knopf "Dienst anhalten" (Reiter Test)
+# angehalten wurde: der Knopf legt diesen Merker NEBEN den Datenordner, "Dienst
+# neu starten" nimmt ihn weg. Bis 1.2.12 gab es ihn nicht, und dieser Waechter
+# startete einen angehaltenen Dienst binnen fuenf Minuten wieder (in WSL
+# gemessen, Pruefung-APC-UPS-1.2.13, Fall S1). Neben dem Ordner, damit ein
+# Update ihn nicht loescht (Regeln/06, Sollmerker; Bauart Zendure/Govee, hier
+# als Anhaltemerker, weil der Waechter dieser Linie ab Werk startet).
+if [ -f "REPLACELBPDATADIR.angehalten" ]; then
     exit 0
 fi
 

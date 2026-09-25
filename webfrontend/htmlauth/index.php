@@ -239,10 +239,17 @@ if ($ap_ist_post && isset($_POST['save'])) {
 
     if (ap_config_write($neu)) {
         $ap_saved = true;
-        ap_dienst('restart');
-        $ap_hinweise[] = ap_dienst_pid()
-            ? ap_t('TEXT.DIENST_NEU_GESTARTET')
-            : ap_t('TEXT.DIENST_LAEUFT_NICHT');
+        // 'uebernehmen': neu starten, damit die Einstellungen gelten - einen
+        // mit "Dienst anhalten" angehaltenen Dienst aber nicht (bis 1.2.12
+        // startete jedes Speichern ihn wieder; Pruefung-APC-UPS-1.2.13, S4).
+        ap_dienst('uebernehmen');
+        if (ap_angehalten()) {
+            $ap_hinweise[] = ap_t('TEXT.DIENST_ANGEHALTEN');
+        } else {
+            $ap_hinweise[] = ap_dienst_pid()
+                ? ap_t('TEXT.DIENST_NEU_GESTARTET')
+                : ap_t('TEXT.DIENST_LAEUFT_NICHT');
+        }
         list($ap_cfg, $ap_altformat) = ap_config_read();
     } else {
         $ap_fehler[] = ap_t('TEXT.SCHREIBFEHLER') . ' ' . $ap_p['config'];
@@ -290,10 +297,17 @@ if ($ap_ist_post && isset($_POST['save_mqtt'])) {
 
     if (ap_config_write($neu)) {
         $ap_saved = true;
-        ap_dienst('restart');
-        $ap_hinweise[] = ap_dienst_pid()
-            ? ap_t('TEXT.DIENST_NEU_GESTARTET')
-            : ap_t('TEXT.DIENST_LAEUFT_NICHT');
+        // 'uebernehmen': neu starten, damit die Einstellungen gelten - einen
+        // mit "Dienst anhalten" angehaltenen Dienst aber nicht (bis 1.2.12
+        // startete jedes Speichern ihn wieder; Pruefung-APC-UPS-1.2.13, S4).
+        ap_dienst('uebernehmen');
+        if (ap_angehalten()) {
+            $ap_hinweise[] = ap_t('TEXT.DIENST_ANGEHALTEN');
+        } else {
+            $ap_hinweise[] = ap_dienst_pid()
+                ? ap_t('TEXT.DIENST_NEU_GESTARTET')
+                : ap_t('TEXT.DIENST_LAEUFT_NICHT');
+        }
         list($ap_cfg, $ap_altformat) = ap_config_read();
     } else {
         $ap_fehler[] = ap_t('TEXT.SCHREIBFEHLER') . ' ' . $ap_p['config'];

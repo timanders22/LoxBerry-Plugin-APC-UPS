@@ -3,14 +3,48 @@
 # To use important variables from command line use the following code:
 PSHNAME=$2    # Second argument is Plugin-Name for scipts etc.
 PDIR=$3       # Third argument is Plugin installation folder
+
+# ---------- Die Wurzel: gelesen, nicht geraten ----------
+# Bis 1.2.12 war sie das fuenfte Argument, ohne Pruefung und ohne Suche.
+# Fehlte es, lauteten die Pfade /log/plugins/<ordner> und /bin/plugins/...
+# ab der Laufwerkswurzel (in WSL gemessen, Pruefung-APC-UPS-1.2.13, Fall
+# H3). Dieselbe Stelle wie in preupgrade.sh: $5, dann LBHOMEDIR, dann die
+# Suche nach config/plugins, data/plugins UND config/system/general.json;
+# ohne Wurzel <WARNING> und Rueckgabe 1.
+apc_wurzel_suchen() {
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd -P)
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ "$i" -lt 8 ]; do
+        if [ -d "$v/config/plugins" ] && [ -d "$v/data/plugins" ] \
+           && [ -f "$v/config/system/general.json" ]; then
+            echo "$v"; return 0
+        fi
+        v=$(dirname "$v"); i=$((i + 1))
+    done
+    return 1
+}
+APC_BASE="${5:-}"
+if [ -z "$APC_BASE" ] || [ ! -d "$APC_BASE/config/plugins" ] || [ ! -d "$APC_BASE/data/plugins" ]; then
+    if [ -n "${LBHOMEDIR:-}" ] && [ -d "$LBHOMEDIR/config/plugins" ] \
+       && [ -d "$LBHOMEDIR/data/plugins" ]; then
+        APC_BASE="$LBHOMEDIR"
+    else
+        APC_BASE=$(apc_wurzel_suchen) || APC_BASE=""
+    fi
+fi
+if [ -z "$APC_BASE" ]; then
+    echo "<WARNING> Es wurde keine LoxBerry-Wurzel gefunden: weder als fuenftes Argument"
+    echo "<WARNING> noch in \$LBHOMEDIR, und oberhalb dieses Skripts traegt kein Verzeichnis"
+    echo "<WARNING> config/plugins, data/plugins und config/system/general.json."
+    echo "<WARNING> Es wurde nichts angelegt und nichts zurueckgespielt."
+    exit 1
+fi
 # Rueckfall, falls sudo die Umgebung ausgeraeumt hat (env_reset), wie in
-# preupgrade.sh und postupgrade.sh. Das fuenfte Argument ist das
-# Wurzelverzeichnis. Ohne den Rueckfall zeigte PLOG auf /<ordner>: in WSL
-# mit geleerter Umgebung gemessen (Pruefung-APC-UPS-1.2.10, Fall n5), die
-# Protokolldatei entstand nicht, und chmod traf keine Datei.
-LBPLOG="${LBPLOG:-$5/log/plugins}"
-LBPBIN="${LBPBIN:-$5/bin/plugins}"
-#LBHOMEDIR=$5 # Comes from /etc/environment now.
+# preupgrade.sh und postupgrade.sh. Ohne den Rueckfall zeigte PLOG auf
+# /<ordner>: in WSL mit geleerter Umgebung gemessen (Pruefung-APC-UPS-1.2.10,
+# Fall n5), die Protokolldatei entstand nicht, und chmod traf keine Datei.
+LBPLOG="${LBPLOG:-$APC_BASE/log/plugins}"
+LBPBIN="${LBPBIN:-$APC_BASE/bin/plugins}"
 
 PLOG=$LBPLOG/$PDIR
 
@@ -137,9 +171,17 @@ echo "<INFO> Naechster Schritt: Reiter Test -> Jetzt abfragen."
 #
 # Eine gueltige Konfiguration wird NIE ueberschrieben. Eine Sicherung, die
 # echte Einstellungen ersetzt, waere schlimmer als gar keine.
-NETZ_BASE="${5:-$LBHOMEDIR}"
+NETZ_BASE="$APC_BASE"
 NETZ_PDIR="${3:-apc_ups_ng}"
 NETZ_CFG="$NETZ_BASE/config/plugins/$NETZ_PDIR"
+# Traegt eine apc_ups_ng.cfg einen vollstaendigen Stand? Wortgleich mit
+# preupgrade.sh: Kopf [apc_ups_ng] und formtoken mit 32 Hexzeichen als
+# Merkmal einer von der Oberflaeche ganz geschriebenen Datei.
+apc_cfg_hat_inhalt() {
+    [ -f "$1" ] && [ -r "$1" ] || return 1
+    grep -qE '^\[apc_ups_ng\][[:space:]]*$' "$1" 2>/dev/null || return 1
+    grep -qE '^formtoken=[0-9a-fA-F]{32}[[:space:]]*$' "$1" 2>/dev/null
+}
 netz_zurueck() {
     datei=$1; soll=$2
     ziel="$NETZ_CFG/$datei"
@@ -152,13 +194,23 @@ netz_zurueck() {
         ist=$(sha256sum "$ziel" 2>/dev/null | cut -d" " -f1)
         [ -n "$ist" ] && [ "$ist" = "$soll" ] && verloren=1
     fi
-    if [ "$verloren" = "1" ]; then
-        if cp -p "$zweit" "$ziel" 2>/dev/null; then
-            echo "<OK> $datei aus der Zweitschrift wiederhergestellt."
-        else
-            echo "<WARNING> $datei liess sich nicht zurueckspielen. Die Sicherung"
-            echo "<WARNING> liegt unter $zweit und kann von Hand kopiert werden."
-        fi
+    [ "$verloren" = "1" ] || return 0
+    # Eingespielt wird nur eine Zweitschrift, die selbst einen Stand traegt -
+    # nach INHALT, nicht nach ihrem Dasein. Bis 1.2.12 ging jede hinein, auch
+    # eine ohne Kopf und Formulartoken (etwa aus einer Fassung, die noch nach
+    # Groesse sicherte), und die Meldung lautete trotzdem "wiederhergestellt"
+    # (in WSL gemessen, Pruefung-APC-UPS-1.2.13, Fall H5). Gemeldet wird erst,
+    # was nachgesehen ist (cmp).
+    if ! apc_cfg_hat_inhalt "$zweit"; then
+        echo "<WARNING> Die Zweitschrift $zweit traegt keinen vollstaendigen Stand"
+        echo "<WARNING> (Kopf [apc_ups_ng] und Formulartoken) - sie wird nicht eingespielt."
+        return 0
+    fi
+    if cp -p "$zweit" "$ziel" 2>/dev/null && cmp -s "$zweit" "$ziel"; then
+        echo "<OK> $datei aus der Zweitschrift wiederhergestellt."
+    else
+        echo "<WARNING> $datei liess sich nicht zurueckspielen. Die Sicherung"
+        echo "<WARNING> liegt unter $zweit und kann von Hand kopiert werden."
     fi
 }
 netz_zurueck "apc_ups_ng.cfg" "db6b2b24b51a7b599d77f56ea00e03a765b25fad706bb220f2f21a3a20efeda2"

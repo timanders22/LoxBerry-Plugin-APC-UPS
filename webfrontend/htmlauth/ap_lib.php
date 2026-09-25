@@ -46,12 +46,15 @@ if (!function_exists('ap_e')) {
 
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
  *
- * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
- * config/plugins UND webfrontend enthaelt. Das trifft die uebliche
- * Installation genauso wie eine an einem anderen Ort - und es trifft auch
- * den Fall, dass das Plugin noch als entpacktes Archiv daliegt (dann findet
- * es nichts und gibt einen Leerstring zurueck, was der Aufrufer ohnehin
- * abfangen muss).
+ * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis config/plugins,
+ * data/plugins UND config/system/general.json traegt. Findet die Suche
+ * nichts, ist die Antwort '' - einen Rueckfall danach gibt es nicht; jeder
+ * Aufrufer faengt das ab.
+ *
+ * Bis 1.2.12 genuegten config/plugins und webfrontend - genau diese Ordner
+ * hinterlaesst ein Pruefstand auf einem Arbeitsrechner (Regeln/06). In WSL
+ * gemessen (Pruefung-APC-UPS-1.2.13, Fall O1): in einem fremden Baum ohne
+ * general.json nahm diese Bibliothek den Baum als Wurzel.
  *
  * Der Name traegt kein Plugin-Kuerzel und ist deshalb abgesichert: zwei
  * Bibliotheken landen nie im selben Prozess, aber die Pruefung kostet nichts.
@@ -61,7 +64,8 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     {
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/data/plugins')
+                && is_file($d . '/config/system/general.json')) {
                 return $d;
             }
             $eltern = dirname($d);
@@ -72,27 +76,69 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     }
 }
 
+/* Die Wurzel in der Reihenfolge der Hausregel: erst die Umgebung, dann die
+ * Suche - und danach nichts mehr. Ein gesetztes LBHOMEDIR gilt mit
+ * config/plugins UND data/plugins darunter; general.json wird hier nicht
+ * verlangt, damit die Attrappe der Pruefwerkzeuge (Werkzeuge/lb) weiter
+ * traegt. Rueckgabe '' heisst "keine Wurzel". Bauart tb_lbhome() in
+ * Spotpreis-Tibber 0.9.19. */
+function ap_lbhome()
+{
+    $h = getenv('LBHOMEDIR');
+    if ($h && is_dir($h . '/config/plugins') && is_dir($h . '/data/plugins')) {
+        return rtrim($h, '/');
+    }
+    return lb_wurzel_ermitteln();
+}
+
 function ap_paths()
 {
     static $p = null;
     if ($p !== null) {
         return $p;
     }
-    $home = getenv('LBHOMEDIR');
-    if (!$home) {
-        $home = lb_wurzel_ermitteln();
-    }
-    $dir = getenv('LBPPLUGINDIR');
-    if (!$dir) {
-        $dir = basename(dirname(dirname(__DIR__)));
-    }
-    if ($home && !is_dir($home . '/config/plugins/' . $dir)) {
-        foreach (array(basename(dirname(__DIR__)), 'apc_ups_ng') as $cand) {
-            if (is_dir($home . '/config/plugins/' . $cand)) {
-                $dir = $cand;
-                break;
-            }
+    $home = ap_lbhome();
+    /* Der Ordnername: LBPPLUGINDIR (nur sein letzter Teil, und nur, wenn er
+     * ein Pluginordner sein KANN), sonst der eigene Ablageort - installiert
+     * liegt diese Datei unter webfrontend/htmlauth/plugins/<ordner>.
+     *
+     * Bis 1.2.12 stand hier basename(dirname(dirname(__DIR__))): installiert
+     * ergab das 'htmlauth', und die Suche fiel auf den festen Namen
+     * apc_ups_ng zurueck - auch bei einer Zweitinstallation apc_ups_ng01,
+     * die damit Konfiguration und Dienst der ersten verwaltete (in WSL
+     * gemessen, Pruefung-APC-UPS-1.2.13, Fall O6; Regeln/06, "Ein Rueckfall
+     * auf den vorgesehenen Ordnernamen"). */
+    $lbp = basename(rtrim((string) getenv('LBPPLUGINDIR'), '/'));
+    $kein_ordner = array('', '.', '/', 'html', 'htmlauth', 'bin', 'plugins');
+    $lbp_gilt = !in_array($lbp, $kein_ordner, true);
+    $dir = $lbp_gilt ? $lbp : basename(__DIR__);
+    /* Archivmodus. Die Pfade DER ANLAGE gelten nur, wenn diese Bibliothek
+     * dort installiert liegt (<Wurzel>/webfrontend/htmlauth/plugins/<ordner>,
+     * physisch verglichen) oder der Aufrufer Wurzel UND Ordner ausdruecklich
+     * nennt (LBHOMEDIR und LBPPLUGINDIR - so arbeiten die Pruefwerkzeuge mit
+     * ihrer Attrappe). Sonst ist das ein ausgepacktes Archiv oder ein
+     * Pruefordner: alles bleibt in dessen eigenem Ordner, und Dienst- und
+     * Meldeknoepfe verweigern (ap_dienst(), Reiter Test "melden").
+     *
+     * Bis 1.2.12 nahm ein Archiv unterhalb einer echten Wurzel diese Wurzel
+     * und den festen Namen apc_ups_ng - Konfiguration, Dienst und
+     * Benachrichtigung der Anlage. In WSL gemessen (Pruefung-APC-UPS-1.2.13,
+     * Faelle O2 bis O4, O11): "Dienst anhalten" aus dem Archiv beendete den
+     * Dienst der Anlage. Bauart tb_paths() in Spotpreis-Tibber 0.9.19. */
+    $gefunden = $home;
+    if ($home !== '') {
+        $soll = @realpath($home . '/webfrontend/htmlauth/plugins/' . basename(__DIR__));
+        $ist = @realpath(__DIR__);
+        $installiert = ($soll !== false && $ist !== false && $soll === $ist);
+        $ausdruecklich = $lbp_gilt && $home === rtrim((string) getenv('LBHOMEDIR'), '/');
+        if (!$installiert && !$ausdruecklich) {
+            $home = '';
         }
+    }
+    if ($home === '' && !$lbp_gilt) {
+        // Nur eine Beschriftung (Vorlage, Selbstaufruf) - im Archiv heisst
+        // der Ablageort htmlauth, und das ist kein Pluginordner.
+        $dir = 'apc_ups_ng';
     }
     $status = is_dir('/run/shm') ? '/run/shm/apc_ups_ng_status.json'
                                  : '/tmp/apc_ups_ng_status.json';
@@ -100,10 +146,11 @@ function ap_paths()
     // Was der Installer gesetzt hat, gilt - selbst ausrechnen ist der
     // zweite Weg, nicht der erste. Bis 1.1.6 wurden LBPCONFIGDIR, LBPBINDIR
     // und LBPLOGDIR uebergangen und die Pfade aus $home zusammengesetzt.
+    // Im Archivmodus gelten sie nicht: sie zeigen in die Anlage.
     $base = dirname(dirname(__DIR__));
-    $cfgdir = getenv('LBPCONFIGDIR');
-    $bindir = getenv('LBPBINDIR');
-    $logdir = getenv('LBPLOGDIR');
+    $cfgdir = $home !== '' ? getenv('LBPCONFIGDIR') : false;
+    $bindir = $home !== '' ? getenv('LBPBINDIR') : false;
+    $logdir = $home !== '' ? getenv('LBPLOGDIR') : false;
     if ($home) {
         $p = array(
             'home'   => $home,
@@ -115,19 +162,33 @@ function ap_paths()
             'bindir' => $bindir ? $bindir : $home . '/bin/plugins/' . $dir,
             'logdir' => $logdir ? $logdir : $home . '/log/plugins/' . $dir,
             'status' => $status,
+            'archiv' => '',
         );
     } else {
+        // Keine Wurzel oder ein Archiv: neben dem Plugin arbeiten. Bis 1.2.12
+        // stand das Protokollverzeichnis hier auf dem Systemordner fuer
+        // Zwischendateien - der Reiter Logdateien zeigte dann die juengste
+        // fremde .log-Datei dort.
         $p = array(
             'home'   => '',
             'plugin' => $dir,
             'config' => $base . '/config/apc_ups_ng.cfg',
             'ereignisse' => $base . '/config/apc_ereignisse.json',
             'bindir' => $base . '/bin',
-            'logdir' => sys_get_temp_dir(),
+            'logdir' => $base . '/log',
             'status' => $status,
+            // Die gefundene Wurzel, wenn diese Datei NICHT darin installiert
+            // liegt - fuer die Meldung; ohne jede Wurzel leer.
+            'archiv' => $gefunden !== '' ? $gefunden : $base,
         );
     }
     return $p;
+}
+
+/** Meldung, mit der Dienst- und Meldeknoepfe im Archivmodus verweigern. */
+function ap_archiv_text()
+{
+    return sprintf(ap_t('TEST.ARCHIV_VERWEIGERT'), dirname(dirname(__DIR__)));
 }
 
 /** Voreinstellungen. Muessen zu VORGABEN in apc_common.py passen. */
@@ -399,9 +460,65 @@ function ap_dienst_pid()
     return $alle ? $alle[0] : 0;
 }
 
+/**
+ * Der Anhaltemerker des Knopfs "Dienst anhalten" - '' ohne Wurzel.
+ *
+ * Er liegt NEBEN dem Datenordner (data/plugins/<ordner>.angehalten), damit
+ * purge_installation ihn beim Update nicht loescht (Regeln/06, Sollmerker;
+ * Bauart Zendure <ordner>.bestand/soll_laufen, Govee <ordner>.soll_laufen).
+ * Hier in umgekehrter Richtung: Waechter und daemon/daemon dieser Linie
+ * starten ab Werk; ein Sollmerker muesste bei jeder Erstinstallation und
+ * jedem Update von 1.2.12 oder frueher erst entstehen, sonst bliebe der
+ * Dienst aus. Achten muessen ihn cron/cron.05min, daemon/daemon,
+ * postupgrade.sh und das Speichern (ap_dienst('uebernehmen')); uninstall
+ * raeumt ihn weg.
+ */
+function ap_anhalte_merker()
+{
+    $p = ap_paths();
+    return $p['home'] === '' ? ''
+        : $p['home'] . '/data/plugins/' . $p['plugin'] . '.angehalten';
+}
+
+/** Hat der Anwender den Dienst mit "Dienst anhalten" angehalten? */
+function ap_angehalten()
+{
+    $m = ap_anhalte_merker();
+    clearstatcache();
+    return $m !== '' && is_file($m);
+}
+
+/**
+ * Den Dienst steuern.
+ *
+ *   'stop'        Knopf "Dienst anhalten": beenden UND den Anhaltemerker
+ *                 legen - bis 1.2.12 beendete er nur den Prozess, und der
+ *                 Waechter startete ihn binnen fuenf Minuten wieder (in WSL
+ *                 gemessen, Pruefung-APC-UPS-1.2.13, Fall S1).
+ *   'restart'     Knopf "Dienst neu starten": den Merker nehmen, neu starten.
+ *   'uebernehmen' Speichern: neu starten, damit die Einstellungen gelten -
+ *                 aber nur, wenn der Dienst nicht angehalten ist (Fall S4).
+ */
 function ap_dienst($aktion)
 {
     $p = ap_paths();
+    // Aus einem Archiv oder ohne Wurzel wird kein Dienst gestartet oder
+    // beendet - weder der des Archivs noch der der Anlage (Archivmodus in
+    // ap_paths(); in WSL gemessen, Pruefung-APC-UPS-1.2.13, Faelle O3, O4).
+    if ($p['home'] === '') {
+        return ap_archiv_text();
+    }
+    $merker = ap_anhalte_merker();
+    if ($aktion === 'uebernehmen') {
+        if (ap_angehalten()) {
+            return '';
+        }
+        $aktion = 'restart';
+    } elseif ($aktion === 'restart' || $aktion === 'start') {
+        if (is_file($merker)) {
+            @unlink($merker);
+        }
+    }
     $skript = ap_dienst_skript();
     $meldungen = array();
     if (in_array($aktion, array('stop', 'restart'), true)) {
@@ -435,6 +552,13 @@ function ap_dienst($aktion)
             @unlink($pf);
             $meldungen[] = 'Eine liegengebliebene PID-Datei wurde entfernt.';
         }
+        // Nur der Knopf "Dienst anhalten" legt den Merker; ein Neustart
+        // beendet ebenfalls, will aber, dass der Dienst weiterlaeuft.
+        // Geprueft wird die Wirkung (ap_angehalten()), nicht der
+        // Rueckgabewert - die Meldung dazu schreibt ap_test.php.
+        if ($aktion === 'stop') {
+            @file_put_contents($merker, time() . "\n");
+        }
     }
     if (in_array($aktion, array('start', 'restart'), true)) {
         if (!is_file($skript)) {
@@ -460,7 +584,14 @@ function ap_dienst($aktion)
 
 function ap_mqtt_broker()
 {
-    $f = ap_paths()['home'] . '/config/system/general.json';
+    // Ohne Wurzel gibt es keinen Broker - bis 1.2.12 wurde hier dann
+    // /config/system/general.json ab der Laufwerkswurzel gelesen (in WSL
+    // gemessen, Pruefung-APC-UPS-1.2.13, Fall O8).
+    $home = ap_paths()['home'];
+    if ($home === '') {
+        return '';
+    }
+    $f = $home . '/config/system/general.json';
     if (!is_file($f)) {
         return '';
     }
@@ -527,21 +658,23 @@ function ap_gateway_autostart()
  * ================================================================== */
 
 /**
- * Die Themen, die das Lebenszeichen ausmachen.
+ * Die Themen, die nach Regeln/07 NIE retained sein duerfen.
  *
- * Nach Regeln/07 (Hausstandard 03.09.2026, bekraeftigt 17.09.2026) ist das
- * Lebenszeichen NIE retained: zurueckbehalten zeigte es immer "lebt". Dazu
- * gehoert der Gesundheitsmerker (hier service/online) genauso wie der
- * Zeitstempel. Der Last Will ist Teil davon und geht ebenfalls fluechtig
- * hinaus - er steht nur in bin/apc_service.py, nicht in der Themenliste.
- *
- * Nicht dazu gehoert 'valid': das ist ein ZUSTAND der Quelle (hat apcaccess
- * gueltige Werte geliefert?), in derselben Klasse wie comm_lost - und
- * Zustaende sind retained.
+ * 1. Das Lebenszeichen (Hausstandard 03.09.2026, bekraeftigt 17.09.2026):
+ *    zurueckbehalten zeigte es immer "lebt" - service/online und timestamp.
+ *    Der Last Will ist Teil davon und geht ebenfalls fluechtig hinaus; er
+ *    steht nur in bin/apc_service.py, nicht in der Themenliste.
+ * 2. Was der DIENST ueber sich selbst sagt (Entscheidung 19.09.2026): valid
+ *    (hat die EIGENE apcaccess-Abfrage geklappt?) und last_error. Bis 1.2.12
+ *    stand hier, valid sei ein Zustand der Quelle wie comm_lost und darum
+ *    retained - das ist durch die Entscheidung ueberholt. comm_lost und
+ *    data_valid bleiben retained: das stellt apcupsd ueber die USV fest.
+ * 3. Ein Alter (Entscheidungen 18. und 24.09.2026): battery_age_months wird
+ *    allein durch die Uhr falsch.
  */
-function ap_lebenszeichen_themen()
+function ap_nie_retained_themen()
 {
-    return array('service/online', 'timestamp');
+    return array('service/online', 'timestamp', 'valid', 'last_error', 'battery_age_months');
 }
 
 /**
@@ -899,15 +1032,17 @@ function ap_t($schluessel)
     static $texte = null;
     if ($texte === null) {
         // Installiert liegen die Dateien unter
-        // <home>/templates/plugins/<ordner>/lang/ - der Ordnername ergibt
-        // sich aus dem Ablageort dieser Datei.
-        $home = getenv('LBHOMEDIR');
-        if (!$home || !is_dir($home)) {
-            $home = lb_wurzel_ermitteln();
+        // <home>/templates/plugins/<ordner>/lang/. Wurzel und Ordner kommen
+        // aus ap_paths() - ohne Wurzel oder im Archiv wird der installierte
+        // Ort gar nicht erst gefragt. Bis 1.2.12 lautete er dann
+        // /templates/plugins/htmlauth/lang ab der Laufwerkswurzel (in WSL
+        // gemessen, Pruefung-APC-UPS-1.2.13, Fall O7).
+        $ap_p = ap_paths();
+        $pfad = '';
+        if ($ap_p['home'] !== '') {
+            $pfad = $ap_p['home'] . '/templates/plugins/' . $ap_p['plugin'] . '/lang';
         }
-        $ordner = basename(dirname(__FILE__));
-        $pfad = $home . '/templates/plugins/' . $ordner . '/lang';
-        if (!is_dir($pfad)) {
+        if ($pfad === '' || !is_dir($pfad)) {
             // Nicht installiert (Entwicklung): neben dem Plugin nachsehen.
             $pfad = dirname(dirname(dirname(__FILE__))) . '/templates/lang';
         }
