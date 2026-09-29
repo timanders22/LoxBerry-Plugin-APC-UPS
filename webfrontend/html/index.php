@@ -121,7 +121,8 @@ function apc_ordner()
  * Regeln/06, "Ein Rueckfall auf den vorgesehenen Ordnernamen"). */
 function apc_konfig()
 {
-    $aus = array('host' => '');
+    // intervall seit 1.2.14 (C5): fuer OK im Block CALC.
+    $aus = array('host' => '', 'intervall' => '30');
     $home = apc_wurzel();
     $ordner = apc_ordner();
     $kandidaten = array();
@@ -142,8 +143,8 @@ function apc_konfig()
                 continue;
             }
             $k = strtolower(trim(substr($t, 0, $pos)));
-            if ($k === 'host') {
-                $aus['host'] = trim(trim(substr($t, $pos + 1)), "\"'");
+            if ($k === 'host' || $k === 'intervall') {
+                $aus[$k] = trim(trim(substr($t, $pos + 1)), "\"'");
             }
         }
         break;
@@ -271,6 +272,17 @@ $z = apc_zustand();
 if (is_array($z) && !empty($z['werte']) && is_array($z['werte'])) {
     $alter = max(0, time() - (int) (isset($z['zeit']) ? $z['zeit'] : 0));
     echo " <CALC alter=\"" . (int) $alter . "\">\n";
+    /* Entscheidung 4 (29.09.2026), C5: OK faellt auf 0, sobald die
+     * Zustandsdatei aelter ist als das Dreifache des Abfragetakts - etwa weil
+     * der Dienst steht. Bis 1.2.13 lieferte der Block dann unbegrenzt den
+     * letzten Zustand mit DATA_VALID=1 (gemessen: 3600 s alt, Takt 30 s,
+     * ONBATT neben einer Netz meldenden USV). ALTER steht als Element daneben,
+     * weil eine Befehlserkennung <X>\v ein Attribut schlecht greift; das
+     * Attribut alter bleibt. Der Takt wie im Reiter Test: mindestens 5 s,
+     * unlesbar = Vorgabe 30 s. */
+    $takt = ctype_digit((string) $cfg['intervall']) ? max(5, (int) $cfg['intervall']) : 30;
+    echo "   <OK>" . ($alter <= 3 * $takt ? 1 : 0) . "</OK>\n";
+    echo "   <ALTER>" . (int) $alter . "</ALTER>\n";
     foreach ($z['werte'] as $k => $v) {
         $name = strtoupper(preg_replace('/[^A-Za-z0-9_]/', '_', (string) $k));
         if ($name === '' || !preg_match('/^[A-Z_][A-Z0-9_]*$/', $name)) {

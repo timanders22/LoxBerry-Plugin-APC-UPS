@@ -69,13 +69,25 @@ def mqtt_leeren():
         sys.stdout.write("<WARNING> " + gem.archiv_meldung("apc_lesen.py --mqtt-leeren"))
         return 2
     cfg, _alt = gem.konfiguration_lesen()
-    praefix = str(cfg.get("themenpraefix") or "apcups").strip("/") or "apcups"
-    eigene = set(gem.themen_schluessel()) | set(gem.ALTLAST)
+    # Das Praefix aus derselben Funktion wie der Dienst (M5) - ohne
+    # Abschneiden: bis 1.2.13 wurde hier .strip("/") gerechnet, der Dienst
+    # sendete aber unter "apcups/" nach apcups//..., und die Deinstallation
+    # meldete "nichts zu leeren", waehrend 16 Themen stehen blieben.
+    # Dazu jedes Praefix aus dem Merker des Dienstes (M4): dort blieben bis
+    # 1.2.13 die Themen eines frueheren Praefixes fuer immer stehen.
+    praefixe = [gem.mqtt_praefix(cfg)]
+    for p in gem.praefix_merker_lesen():
+        if p not in praefixe:
+            praefixe.append(p)
+    rc = 0
+    for praefix in praefixe:
+        rc = max(rc, _leeren_unter(praefix))
+    return rc
 
-    def auswahl(thema):
-        return thema.startswith(praefix + "/") and thema[len(praefix) + 1:] in eigene
 
-    erg = gem.broker_leeren(praefix, auswahl, warten=3.0)
+def _leeren_unter(praefix):
+    """Die eigenen behaltenen Themen unter <praefix>/ leeren und melden."""
+    erg = gem.broker_leeren(praefix, gem.eigene_auswahl(praefix), warten=3.0)
     if erg["rc"] == 2:
         print("<WARNING> MQTT: die behaltenen Themen unter {0}/ wurden nicht geleert - "
               "{1}.".format(praefix, erg["grund"]))

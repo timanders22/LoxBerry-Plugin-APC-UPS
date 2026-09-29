@@ -213,6 +213,48 @@ netz_zurueck() {
         echo "<WARNING> liegt unter $zweit und kann von Hand kopiert werden."
     fi
 }
-netz_zurueck "apc_ups_ng.cfg" "db6b2b24b51a7b599d77f56ea00e03a765b25fad706bb220f2f21a3a20efeda2"
+# ---------- Nur bei einer Aktualisierung zurueckspielen (Entscheidung 1, I1) ----------
+# Ob dies eine Aktualisierung ist, sagt allein die Marke
+# data/plugins/<ordner>.upgrade_laeuft: preupgrade.sh legt sie an (und bricht
+# ab, wenn das nicht geht), postupgrade.sh raeumt sie nach diesem Skript ab.
+# Kein Altersvergleich - zwischen preupgrade.sh und diesem Skript kann mehr
+# als eine Stunde liegen (Praezisierung des Hausherrn, 29.09.2026).
+#
+# Bis 1.2.13 fragte netz_zurueck nur "ist die Konfiguration die
+# Archivvorgabe?" - nach einer NEUinstallation ist das immer so, und eine
+# liegengebliebene Zweitschrift einer frueheren Installation (Praefix,
+# E-Mail-Empfaenger, enabled=0, Formulartoken) wurde still eingespielt (in WSL
+# gemessen, Durchgang 29.09.2026, Befund I1 bzw. Code 6). Bei einer
+# Neuinstallation werden Zweitschrift und Upgrade-Sicherung jetzt nach
+# <name>.alt gelegt und EINMAL gemeldet; die Oberflaeche und der Dienst lesen
+# .alt nie, die Deinstallation raeumt es ab.
+APC_MARKE="$NETZ_BASE/data/plugins/$NETZ_PDIR.upgrade_laeuft"
+if [ -f "$APC_MARKE" ]; then
+    netz_zurueck "apc_ups_ng.cfg" "db6b2b24b51a7b599d77f56ea00e03a765b25fad706bb220f2f21a3a20efeda2"
+else
+    APC_BEISEITE=""
+    APC_ZW="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.apc_ups_ng.cfg"
+    if [ -e "$APC_ZW" ] || [ -L "$APC_ZW" ]; then
+        rm -f "$APC_ZW.alt" 2>/dev/null
+        if mv -f "$APC_ZW" "$APC_ZW.alt" 2>/dev/null; then
+            [ -L "$APC_ZW.alt" ] || chmod 600 "$APC_ZW.alt" 2>/dev/null
+            APC_BEISEITE="$APC_BEISEITE $APC_ZW.alt"
+        else
+            echo "<WARNING> $APC_ZW liess sich nicht beiseitelegen - bitte von Hand entfernen."
+        fi
+    fi
+    APC_US="$NETZ_BASE/data/plugins/$NETZ_PDIR.upgrade_sicherung"
+    if [ -e "$APC_US" ] || [ -L "$APC_US" ]; then
+        rm -rf "$APC_US.alt" 2>/dev/null
+        if mv -f "$APC_US" "$APC_US.alt" 2>/dev/null; then
+            APC_BEISEITE="$APC_BEISEITE $APC_US.alt"
+        else
+            echo "<WARNING> $APC_US liess sich nicht beiseitelegen - das naechste Update spielte sie ein. Bitte von Hand entfernen."
+        fi
+    fi
+    if [ -n "$APC_BEISEITE" ]; then
+        echo "<WARNING> Neuinstallation: gesicherte Einstellungen einer frueheren Installation werden NICHT eingespielt; sie liegen beiseite unter:$APC_BEISEITE (die Deinstallation raeumt sie ab)."
+    fi
+fi
 
 exit 0

@@ -187,6 +187,16 @@ class Mqtt:
 
     def start(self, leise=False):
         """Verbindung aufbauen. Rueckgabe: True, wenn sie steht."""
+        # C4/M5: ein unzulaessiges Praefix (etwa mit # oder +, oder mit
+        # Schraegstrich am Rand) wird gemeldet, und es entsteht KEINE
+        # Verbindung - gesendet wird nichts. Bis 1.2.13 lief jede
+        # Veroeffentlichung in eine Ausnahme, und jede Runde baute einen neuen
+        # Client auf, waehrend der alte verbunden blieb.
+        if not gem.praefix_gueltig(self.praefix):
+            if not leise:
+                log.error("MQTT: das Themenpraefix %r ist unzulaessig - es wird nichts "
+                          "gesendet. Im Reiter MQTT berichtigen und speichern.", self.praefix)
+            return False
         try:
             import paho.mqtt.client as mqtt
         except ImportError:
@@ -310,17 +320,43 @@ class Mqtt:
         if not self.client:
             return
         text = "" if wert is None else str(wert)
-        # Ein LEERER Wert geht nie retained hinaus: eine leere Nutzlast mit
-        # retain loescht das zurueckbehaltene Thema im Broker (Regeln/07, am
-        # Broker belegt 14.09.2026). wert_text() liefert "" fuer ein Feld, das
-        # die USV nicht meldet - bis 1.2.9 verschwand damit z. B. "model" aus
-        # dem Broker, obwohl die Tabelle es als retained ansagt.
+        behalten = unterthema in self.retain
+        # Ein retained Thema ohne Aussage geht als "-" retained hinaus
+        # (Entscheidung 5, 29.09.2026) - nie leer: eine leere Nutzlast mit
+        # retain loescht das Thema im Broker (Regeln/07, belegt 14.09.2026),
+        # und bis 1.2.13 ging sie deshalb FLUECHTIG hinaus, waehrend der
+        # Altwert (etwa alarm_level 0, "alles ruhig") retained stehen blieb
+        # (in WSL gemessen, Befund M1).
+        if behalten and text == "":
+            text = "-"
         try:
             self.client.publish(self.praefix + "/" + unterthema, text,
-                                qos=0, retain=(unterthema in self.retain and text != ""))
+                                qos=0, retain=behalten)
         except Exception as fehler:  # noqa: BLE001
             log.error("MQTT-Veroeffentlichung fehlgeschlagen: %s", fehler)
-            self.verbunden = False
+            self._abbauen()
+
+    def _abbauen(self):
+        """Den Client ganz abbauen (C4): abmelden, Netzfaden anhalten, Socket
+        schliessen. Bis 1.2.13 stand nach einem gescheiterten publish() nur
+        verbunden=False da; nachfassen() baute einen NEUEN Client, und der alte
+        blieb verbunden - nach vier Runden fuenf offene Verbindungen (in WSL
+        gemessen, Befund 4)."""
+        k, self.client = self.client, None
+        self.verbunden = False
+        if k is None:
+            return
+        for schritt in ("disconnect", "loop_stop"):
+            try:
+                getattr(k, schritt)()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            s = k.socket()
+            if s is not None:
+                s.close()
+        except Exception:  # noqa: BLE001
+            pass
 
     def stop(self):
         if not self.client:
@@ -390,8 +426,14 @@ class Dienst:
         if alt:
             log.info("Konfiguration im alten Format erkannt - wird uebernommen "
                      "und beim naechsten Speichern neu geschrieben")
-        self.praefix = self.cfg.get("themenpraefix") or "apcups"
+        self.praefix = gem.mqtt_praefix(self.cfg)
         self.mqtt = Mqtt(self.praefix)
+        self._retain = gem.retain_themen()
+        # M7: wann service/online=1 zuletzt im Vollversand hinausging
+        self._letztes_online = 0.0
+        # M4: Abraeumen unter frueheren Praefixen - offen, und wann wieder
+        self._raeumen_offen = True
+        self._raeumen_naechster = 0.0
         self.laeuft = True
         self.letzter_stand = {}
         self.letzter_status = None
@@ -490,8 +532,70 @@ class Dienst:
         Wirkung.
         """
         return (self.cfg.get("mqtt", "1") == "1",
-                self.cfg.get("themenpraefix") or "apcups",
+                gem.mqtt_praefix(self.cfg),
                 gem.mqtt_zugangsdaten())
+
+    def _praefixe_raeumen(self):
+        """Behaltene Themen unter FRUEHEREN Praefixen abraeumen (M4).
+
+        Der Merker gem.PRAEFIX_MERKER fuehrt jedes Praefix, unter dem dieser
+        Dienst gesendet hat. Jedes, das nicht das heutige Sendepraefix ist -
+        nach einem Praefixwechsel, oder alle, wenn MQTT aus ist -, wird mit
+        broker_leeren() geleert (nur die eigenen Themen) und NACHGELESEN;
+        erst dann faellt es aus dem Merker. Klappt das nicht (Broker nicht zu
+        fragen, etwas steht noch), bleibt es drin: neuer Versuch nach zehn
+        Minuten, und die Deinstallation leert es ebenfalls.
+
+        Bis 1.2.13 blieben beim Praefixwechsel alle 19 retained Themen unter
+        dem alten Praefix fuer immer im Broker, ebenso beim Ausschalten von
+        MQTT (in WSL gemessen, Befund M4). Laeuft gleich danach ein Neustart
+        des Dienstes (Speichern in der Oberflaeche), erledigt es der Start.
+        """
+        if not self._raeumen_offen:
+            return
+        jetzt = time.time()
+        if jetzt < self._raeumen_naechster:
+            return
+        ein, praefix, _zugang = self._mqtt_soll()
+        soll = praefix if (ein and gem.praefix_gueltig(praefix)) else ""
+        liste = gem.praefix_merker_lesen()
+        bleibt = []
+        for alt in liste:
+            if alt == soll:
+                continue
+            if not gem.praefix_abonnierbar(alt):
+                log.warning("MQTT: unter dem frueheren Praefix %r laesst sich nicht "
+                            "abonnieren - dort wird nichts geleert.", alt)
+                continue
+            erg = gem.broker_leeren(alt, gem.eigene_auswahl(alt))
+            if erg["rc"] == 0:
+                if erg["geleert"]:
+                    log.info("MQTT: unter dem frueheren Praefix %s/ %d behaltene Themen "
+                             "geloescht und nachgelesen.", alt, len(erg["geleert"]))
+                else:
+                    log.info("MQTT: unter dem frueheren Praefix %s/ lag nichts behalten.", alt)
+                continue
+            bleibt.append(alt)
+            if erg["rc"] == 1:
+                log.warning("MQTT: unter dem frueheren Praefix %s/ stehen nach dem Loeschen "
+                            "noch %d Themen (zum Beispiel %s) - neuer Versuch in zehn "
+                            "Minuten.", alt, len(erg["rest"]), erg["rest"][0])
+            else:
+                log.warning("MQTT: die behaltenen Themen unter dem frueheren Praefix %s/ "
+                            "wurden nicht geleert - %s. Neuer Versuch in zehn Minuten.",
+                            alt, erg["grund"])
+        neu = list(bleibt)
+        if soll and soll not in neu:
+            neu.append(soll)
+        if neu != liste and not gem.praefix_merker_schreiben(neu):
+            log.warning("MQTT: der Merker %s liess sich nicht schreiben.", gem.PRAEFIX_MERKER)
+        if bleibt:
+            self._raeumen_naechster = time.time() + 600
+        else:
+            self._raeumen_offen = False
+        # M9: die Abo-Datei des Gateways folgt dem Praefix.
+        if soll and gem.abo_datei_nachfuehren(soll) is None:
+            log.warning("MQTT: die Abo-Datei %s liess sich nicht schreiben.", gem.ABO_DATEI)
 
     def _mqtt_nachziehen(self):
         """Nach dem Neueinlesen die MQTT-Verbindung an die Konfiguration anpassen.
@@ -528,6 +632,10 @@ class Dienst:
         self.praefix = praefix
         self.mqtt = Mqtt(praefix)
         self._mqtt_stand = soll
+        # M4: das bisherige Praefix abraeumen (oder alle, wenn MQTT aus ist).
+        self._raeumen_offen = True
+        self._raeumen_naechster = 0.0
+        self._praefixe_raeumen()
         if ein:
             self.mqtt.start()
         else:
@@ -568,6 +676,18 @@ class Dienst:
         return True
 
     def _senden(self, thema, wert, erzwingen=False):
+        if wert is None or str(wert) == "":
+            if thema in self._retain:
+                # Entscheidung 5: ein retained Zustand ohne Aussage heisst "-".
+                wert = "-"
+            elif thema != "last_error":
+                # M8 (Regeln/07: "null wird nicht gesendet"): ein Messwert
+                # ohne Wert geht nicht hinaus. Bis 1.2.13 gingen elf Themen
+                # mit leerer Nutzlast hinaus, und das Gateway reicht leere
+                # Werte an den Miniserver weiter. last_error "" bleibt: es
+                # heisst "kein Fehler" und geht fluechtig hinaus.
+                self.letzter_stand.pop(thema, None)
+                return False
         wert = "" if wert is None else str(wert)
         if not erzwingen and self.letzter_stand.get(thema) == wert:
             return False
@@ -588,7 +708,11 @@ class Dienst:
     def _melden(self, titel, text, schwere):
         """Ereignis protokollieren, ablegen, senden und weiterreichen."""
         log.warning("%s - %s", titel, text)
-        gem.ereignis_anhaengen(time.time(), titel, text)
+        # C9: bis 1.2.13 blieb ein gescheitertes Anhaengen (volle Karte) ohne
+        # jede Spur - das Ereignis fehlte im Reiter Test, und nichts sagte es.
+        if not gem.ereignis_anhaengen(time.time(), titel, text):
+            log.warning("Das Ereignis liess sich nicht in %s ablegen - es fehlt in der "
+                        "Ereignisliste des Reiters Test.", gem.EREIGNIS_FILE)
         self.mqtt.senden("event", titel)
 
         if self.cfg.get("benachrichtigung", "1") == "1":
@@ -666,14 +790,37 @@ class Dienst:
 
         self._melden(titel, text, schwere)
 
+    def _lebenszeichen(self):
+        """service/online=1 im Vollversand (M7), fluechtig, hoechstens alle 30 s.
+
+        Bis 1.2.13 ging es nur nach einer Anmeldung hinaus; nach einem
+        Neustart des Miniservers hatte der Eingang dann keinen Wert, bis sich
+        der Dienst neu anmeldete - das kann Tage dauern (Regeln/07: das
+        Lebenszeichen geht bei jedem Durchgang hinaus; Muster Einspeisebremse
+        0.9.20)."""
+        jetzt = time.time()
+        if jetzt - self._letztes_online < 30:
+            return
+        self._letztes_online = jetzt
+        self.mqtt.senden("service/online", "1")
+
     def durchgang(self, erzwingen=False):
         ergebnis = gem.abfragen(self.cfg)
         werte = ergebnis["werte"]
         jetzt = int(time.time())
+        if erzwingen:
+            self._lebenszeichen()
 
         if werte is None:
             self._einmal("abfrage", ergebnis["fehler"], "warning")
             self._senden("valid", "0", erzwingen)
+            # M2 (Entscheidung 5): das Geraet schweigt - die Zustaende der USV
+            # gehen als "-" retained hinaus statt als stehenbleibender Altwert.
+            # Bis 1.2.13 blieb "status ONLINE, data_valid 1, alarm_level 0"
+            # retained stehen, waehrend nur valid=0 fluechtig hinausging (in
+            # WSL gemessen, Befund M2). Die Stammdaten bleiben stehen.
+            for thema in gem.ZUSTAND_THEMEN:
+                self._senden(thema, None, erzwingen)
             self._senden("last_error", ergebnis["fehler"].splitlines()[0], erzwingen)
             self._senden("timestamp", jetzt, True)
             self.zustand_schreiben({"zeit": jetzt, "version": gem.version(),
@@ -707,9 +854,23 @@ class Dienst:
 
         self._senden("valid", "1", erzwingen)
         self._senden("last_error", "", erzwingen)
+        # M3: ist die Verbindung zur USV abgerissen (COMMLOST), gehen die
+        # Messwerte mit Zeitbezug NICHT hinaus - "bei Stoerung nur das Signal"
+        # (Regeln/07). apcupsd liefert dann die zuletzt bekannten Zahlen oder
+        # 0; bis 1.2.13 gingen sie bei jedem Vollversand als frisch hinaus,
+        # samt time_left (in WSL gemessen, Befund M3). Aus letzter_stand
+        # genommen, damit sie nach der Stoerung sofort wieder hinausgehen.
+        stoerung = bool(werte.get("comm_lost"))
+        zeitbezug = gem.zeitbezug_themen() if stoerung else frozenset()
         for thema, wert in werte.items():
+            if thema in zeitbezug:
+                self.letzter_stand.pop(thema, None)
+                continue
             self._senden(thema, wert, erzwingen)
         for feld, wert in ergebnis["zusatz"].items():
+            if stoerung:
+                self.letzter_stand.pop("raw/" + feld, None)
+                continue
             self._senden("raw/" + feld, wert, erzwingen)
         # Der Zeitstempel geht IMMER hinaus, auch wenn sich sonst nichts
         # geaendert hat: er ist das Mittel, mit dem der Miniserver einen
@@ -747,6 +908,9 @@ class Dienst:
                         "einschalten und speichern.")
 
         self._mqtt_stand = self._mqtt_soll()
+        # M4: vor dem ersten Senden frueher benutzte Praefixe abraeumen (auch
+        # alle, wenn MQTT aus ist); M9: Abo-Datei nachfuehren.
+        self._praefixe_raeumen()
         if self._mqtt_stand[0]:
             self.mqtt.start()
         else:
@@ -780,6 +944,8 @@ class Dienst:
             # Nach dem Durchgang: dann kennt letzter_stand die gueltigen
             # Werte, die unmittelbar nach einer Loeschung hinausgehen.
             self._altlast()
+            # M4: ein gescheitertes Abraeumen alle zehn Minuten wiederholen.
+            self._praefixe_raeumen()
 
             self._kappen()
 

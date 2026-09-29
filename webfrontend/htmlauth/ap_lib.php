@@ -151,6 +151,7 @@ function ap_paths()
     $cfgdir = $home !== '' ? getenv('LBPCONFIGDIR') : false;
     $bindir = $home !== '' ? getenv('LBPBINDIR') : false;
     $logdir = $home !== '' ? getenv('LBPLOGDIR') : false;
+    $datadir = $home !== '' ? getenv('LBPDATADIR') : false;
     if ($home) {
         $p = array(
             'home'   => $home,
@@ -160,6 +161,8 @@ function ap_paths()
             'ereignisse' => ($cfgdir ? $cfgdir : $home . '/config/plugins/' . $dir)
                         . '/apc_ereignisse.json',
             'bindir' => $bindir ? $bindir : $home . '/bin/plugins/' . $dir,
+            // Datenordner (Einmalmeldung nach dem POST, U1 in 1.2.14).
+            'data'   => $datadir ? rtrim($datadir, '/') : $home . '/data/plugins/' . $dir,
             'logdir' => $logdir ? $logdir : $home . '/log/plugins/' . $dir,
             'status' => $status,
             'archiv' => '',
@@ -175,6 +178,7 @@ function ap_paths()
             'config' => $base . '/config/apc_ups_ng.cfg',
             'ereignisse' => $base . '/config/apc_ereignisse.json',
             'bindir' => $base . '/bin',
+            'data'   => $base . '/data',
             'logdir' => $base . '/log',
             'status' => $status,
             // Die gefundene Wurzel, wenn diese Datei NICHT darin installiert
@@ -538,11 +542,13 @@ function ap_dienst($aktion)
                 @exec('kill -9 ' . (int) $pid . ' 2>&1', $meldungen);
                 sleep(1);
             }
+            // Aus der Sprachdatei (U6); bis 1.2.13 standen die Saetze hier fest
+            // deutsch und erschienen so auch in der englischen Oberflaeche.
             $meldungen[] = count($ziel) > 1
-                ? 'Dienste ' . implode(', ', $ziel) . ' beendet.'
-                : 'Dienst ' . $ziel[0] . ' beendet.';
+                ? sprintf(ap_t('TEXT.D_BEENDET_MEHRERE'), implode(', ', $ziel))
+                : sprintf(ap_t('TEXT.D_BEENDET_EINER'), $ziel[0]);
         } else {
-            $meldungen[] = 'Es lief kein Dienst.';
+            $meldungen[] = ap_t('TEXT.D_LIEF_KEINER');
         }
         // Eine PID-Datei ohne lebenden eigenen Dienst dahinter ist ein
         // Ueberbleibsel und wird entfernt - sie gehoerte sonst womoeglich
@@ -550,7 +556,7 @@ function ap_dienst($aktion)
         $pf = ap_pid_datei();
         if (is_file($pf) && ap_dienst_pid() === 0) {
             @unlink($pf);
-            $meldungen[] = 'Eine liegengebliebene PID-Datei wurde entfernt.';
+            $meldungen[] = ap_t('TEXT.D_PID_ENTFERNT');
         }
         // Nur der Knopf "Dienst anhalten" legt den Merker; ein Neustart
         // beendet ebenfalls, will aber, dass der Dienst weiterlaeuft.
@@ -562,7 +568,7 @@ function ap_dienst($aktion)
     }
     if (in_array($aktion, array('start', 'restart'), true)) {
         if (!is_file($skript)) {
-            return 'Dienst nicht gefunden: ' . $skript;
+            return sprintf(ap_t('TEXT.D_NICHT_GEFUNDEN'), $skript);
         }
         // Vorher nachsehen. Ohne diese Pruefung startete jeder Klick auf
         // Speichern eine weitere Fassung - mehrere Dienste fragten dann
@@ -571,12 +577,15 @@ function ap_dienst($aktion)
         // erspart den unnoetigen Start und die irritierende Logzeile.
         $schon = ap_dienst_pid();
         if ($schon > 0) {
-            $meldungen[] = 'Dienst laeuft bereits (PID ' . $schon . ') - kein zweiter Start.';
+            $meldungen[] = sprintf(ap_t('TEXT.D_LAEUFT_BEREITS'), $schon);
             return implode("\n", $meldungen);
         }
         $log = $p['logdir'] . '/apc_ups_ng.log';
+        // Die Rueckmeldung der Schale ("gestartet") geht nicht mehr in die
+        // Meldung: sie war das einzige Wort darin, das nie uebersetzt wurde.
+        $ap_start_aus = array();
         @exec('nohup ' . escapeshellarg($skript) . ' >> ' . escapeshellarg($log)
-            . ' 2>&1 & echo gestartet', $meldungen);
+            . ' 2>&1 & echo gestartet', $ap_start_aus);
         sleep(3);
     }
     return implode("\n", $meldungen);
@@ -1142,54 +1151,401 @@ function ap_abo_text()
  *
  * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte).
  */
-function ap_sicherung_lesen($roh)
+function ap_sicherung_lesen($roh, $bisher = null)
 {
+    /* Bauart E (Befunde B3/B4 des Durchgangs 29.09.2026): bis 1.2.13 wurde
+     * hier jeder bekannte Schluessel UNGEPRUEFT uebernommen - formtoken als
+     * Liste wurde zur Zeichenfolge "Array", enabled=2 hiess fuer den Dienst
+     * "aus" und fuer den Waechter "an", ein Praefix mit # legte jede
+     * Veroeffentlichung lahm. Und eine nach Hausstandard gebaute eigene
+     * Sicherung (ohne formtoken, mit _-Kopf) wurde abgewiesen.
+     *
+     * Jetzt:
+     *   - jeder Wert laeuft durch ap_wert_pruefen() - DIESELBE Pruefung wie
+     *     beim Speichern im Formular;
+     *   - formtoken wird weder verlangt noch uebernommen: das Merkmal gehoert
+     *     diesem LoxBerry, nicht der Datei;
+     *   - Schluessel mit _ am Anfang sind der lesbare Kopf und werden
+     *     ueberlesen;
+     *   - die Beanstandungen sind Klartext. Maskiert wird EINMAL, bei der
+     *     Ausgabe (bis 1.2.13 hier und dort, also doppelt). */
     $mangel = array();
     $daten = json_decode((string) $roh, true);
     if (!is_array($daten)) {
         return array(null, array(ap_t('EINST.SICH_KEIN_JSON')), 0);
     }
-    $neu = ap_defaults();
-    $bekannt = array_keys($neu);
-    $anzahl = 0;
+    if (!is_array($bisher)) {
+        list($bisher, $unbenutzt) = ap_config_read();
+    }
+    $pflicht = ap_sicherung_schluessel();
+    $werte = array();
     foreach ($daten as $k => $w) {
-        if (!in_array($k, $bekannt, true)) {
-            $mangel[] = sprintf(ap_t('EINST.SICH_FREMD'),
-                                 htmlspecialchars((string) $k, ENT_QUOTES, 'UTF-8'));
+        $k = (string) $k;
+        if ($k !== '' && $k[0] === '_') {
             continue;
         }
-        $neu[$k] = $w;
-        $anzahl++;
+        if ($k === 'formtoken') {
+            continue;
+        }
+        if (!in_array($k, $pflicht, true)) {
+            $mangel[] = sprintf(ap_t('EINST.SICH_FREMD'), $k);
+            continue;
+        }
+        $werte[$k] = $w;
     }
-    if ($anzahl === 0) {
+    if (!$werte) {
         $mangel[] = ap_t('EINST.SICH_LEER');
     }
     /* FEHLENDE Schluessel sind eine Beanstandung, kein stiller Rueckfall.
-     *
-     * Bis hierher war die Vorgabenliste der Ausgangspunkt, und nur was in
-     * der Datei stand wurde darueber geschrieben. Eine Datei mit einem
-     * einzigen Schluessel lief damit ohne Beanstandung durch, wurde
-     * gespeichert, und alle uebrigen Einstellungen fielen auf Werk
-     * zurueck - quittiert mit "1 Wert uebernommen".
-     *
-     * Gemessen an VolkswagenID 0.9.11 am 03.09.2026 unter PHP 7.4 und 8.4:
-     * dort fiel dabei auch das Aktionstoken auf '', und jede im Miniserver
-     * eingetragene Adresse war stumm ungueltig. Am 07.09.2026 ueber den
-     * Bestand ausgerollt (30 Linien).
-     *
-     * Der Hausstandard sagt: eine halb gueltige Datei aendert gar nichts.
-     * Verglichen wird gegen die VORGABEN, nicht gegen $bekannt: was
-     * ausserhalb der Konfigurationsdatei liegt - Zugangsdaten in einer
-     * eigenen Datei - faellt nicht auf Werk zurueck und darf hier fehlen. */
-    $fehlend = array();
-    foreach (array_keys(ap_defaults()) as $fk) {
-        if (!array_key_exists($fk, $daten)) {
-            $fehlend[] = $fk;
+     * Gemessen an VolkswagenID 0.9.11 am 03.09.2026: eine Datei mit einem
+     * einzigen Schluessel lief durch, und alle uebrigen Einstellungen fielen
+     * auf Werk zurueck. Der Hausstandard sagt: eine halb gueltige Datei
+     * aendert gar nichts. */
+    $fehlend = array_values(array_diff($pflicht, array_keys($werte)));
+    if ($fehlend) {
+        $mangel[] = sprintf(ap_t('EINST.SICH_FEHLEND'), count($fehlend), implode(', ', $fehlend));
+    }
+    list($gut, $pruef) = ap_werte_pruefen($werte);
+    $mangel = array_merge($mangel, $pruef);
+    if ($mangel) {
+        return array(null, $mangel, count($werte));
+    }
+    $neu = $bisher;
+    foreach ($gut as $k => $v) {
+        $neu[$k] = $v;
+    }
+    return array($neu, array(), count($gut));
+}
+
+/** Die Schluessel einer Sicherung: alle Einstellungen ausser dem Formularmerkmal. */
+function ap_sicherung_schluessel()
+{
+    return array_values(array_diff(array_keys(ap_defaults()), array('formtoken')));
+}
+
+/** Die Fassung aus der Plugindatenbank von LoxBerry, '' wenn nicht feststellbar. */
+function ap_fassung()
+{
+    $p = ap_paths();
+    if ($p['home'] === '') {
+        return '';
+    }
+    $j = @json_decode((string) @file_get_contents($p['home'] . '/data/system/plugindatabase.json'), true);
+    if (!is_array($j)) {
+        return '';
+    }
+    $liste = (isset($j['plugins']) && is_array($j['plugins'])) ? $j['plugins'] : $j;
+    foreach ($liste as $e) {
+        if (!is_array($e)) {
+            continue;
+        }
+        $ordner = isset($e['folder']) ? $e['folder']
+                : (isset($e['PLUGINDB_FOLDER']) ? $e['PLUGINDB_FOLDER'] : '');
+        if ((string) $ordner === $p['plugin']) {
+            return (string) (isset($e['version']) ? $e['version']
+                : (isset($e['PLUGINDB_VERSION']) ? $e['PLUGINDB_VERSION'] : ''));
         }
     }
-    if ($fehlend) {
-        $mangel[] = sprintf(ap_t('EINST.SICH_FEHLEND'), count($fehlend),
-            htmlspecialchars(implode(', ', $fehlend), ENT_QUOTES, 'UTF-8'));
+    return '';
+}
+
+/**
+ * Die Sicherungsdatei (C2): aus ap_config_read(), ohne formtoken, mit
+ * lesbarem _-Kopf (Plugin, Stand, Hinweis). Genau diese Datei nimmt
+ * ap_sicherung_lesen() wieder an.
+ */
+function ap_sicherung_json($cfg)
+{
+    $f = ap_fassung();
+    $aus = array(
+        '_plugin'  => 'APC-UPS NG (' . ap_paths()['plugin'] . ')',
+        '_stand'   => sprintf(ap_t('EINST.SICH_STAND'), $f !== '' ? $f : '?', date('Y-m-d H:i:s')),
+        '_hinweis' => ap_t('EINST.SICH_KOPF_HINWEIS'),
+    );
+    foreach (ap_sicherung_schluessel() as $k) {
+        $aus[$k] = ap_roh($cfg, $k);
     }
-    return array($mangel ? null : $neu, $mangel, $anzahl);
+    return json_encode($aus, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+}
+
+/** Grenzen der Zahlenfelder - EINE Stelle fuer Formular und Sicherung. */
+function ap_grenzen()
+{
+    return array(
+        'intervall'       => array(5, 3600),
+        'aktualisierung'  => array(5, 86400),
+        'vorwarn_min'     => array(0, 600),
+        'vorwarn_prozent' => array(0, 100),
+        'log_kb'          => array(32, 20480),
+    );
+}
+
+/** Beschriftung eines Feldes fuer eine Beanstandung: "Anzeigename (schluessel)". */
+function ap_feld_name($k)
+{
+    $namen = array(
+        'enabled'          => 'EINST.PLUGIN_EINGESCHALTET',
+        'intervall'        => 'EINST.INTERVALL',
+        'aktualisierung'   => 'EINST.AKTUALISIERUNG',
+        'themenpraefix'    => 'MQTT.PRAEFIX',
+        'mqtt'             => 'MQTT.EINSCHALTEN',
+        'benachrichtigung' => 'EINST.BENACHRICHTIGUNG',
+        'email'            => 'EINST.EMAIL',
+        'email_an'         => 'EINST.EMAIL_AN',
+        'host'             => 'EINST.HOST',
+        'vorwarn_min'      => 'EINST.VORWARN_MIN',
+        'vorwarn_prozent'  => 'EINST.VORWARN_PROZENT',
+        'rohfelder'        => 'MQTT.ROHFELDER',
+        'log_kb'           => 'EINST.LOG_KB',
+    );
+    return isset($namen[$k]) ? ap_t($namen[$k]) . ' (' . $k . ')' : $k;
+}
+
+/**
+ * Ist das ein zulaessiges Themenpraefix? (M5)
+ *
+ * Buchstaben, Ziffern, _ und -, Ebenen durch EINEN Schraegstrich getrennt,
+ * kein Schraegstrich am Rand, kein # und kein +, hoechstens 64 Zeichen.
+ * Dieselbe Regel steht in bin/apc_common.py (praefix_gueltig), nach der der
+ * Dienst sendet oder nicht. Bis 1.2.13 nahm die Oberflaeche "apcups/" und
+ * "/apcups" an; der Dienst sendete dann apcups//... bzw. /apcups/..., und die
+ * Deinstallation fand nichts (gemessen 29.09.2026, Befund M5).
+ */
+function ap_praefix_gueltig($p)
+{
+    return is_string($p) && strlen($p) <= 64
+        && preg_match('#^[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*\z#', $p) === 1;
+}
+
+/** Das Praefix, unter dem Dienst und Leeren senden: der gespeicherte Wert,
+ *  leer heisst apcups - wie apc_common.mqtt_praefix(). */
+function ap_praefix($cfg)
+{
+    return ap_cfg($cfg, 'themenpraefix', 'apcups');
+}
+
+/**
+ * Einen Wert pruefen - fuer das Formular UND das Zurueckspielen (C3, C7).
+ *
+ * Rueckgabe: array(ok, Wert als Zeichenkette, Beanstandung). Nichts wird
+ * zurechtgebogen: kein Runden, kein Entfernen von Zeichen, kein Rueckfall auf
+ * die Vorgabe. Der Aufrufer schneidet hoechstens Leerraum am Rand ab (nur
+ * das Formular). Eine ganze Zahl aus einer JSON-Datei gilt bei Zahlenfeldern
+ * als ihre Ziffernfolge; true/false, Listen und Kommazahlen sind die falsche
+ * Form.
+ */
+function ap_wert_pruefen($k, $v)
+{
+    $name = ap_feld_name($k);
+    $g = ap_grenzen();
+    if (is_int($v) && isset($g[$k])) {
+        $v = (string) $v;
+    }
+    if (!is_string($v)) {
+        return array(false, '', sprintf(ap_t('EINST.W_TYP'), $name, gettype($v)));
+    }
+    switch ($k) {
+        case 'enabled':
+        case 'mqtt':
+        case 'benachrichtigung':
+        case 'email':
+            return ($v === '0' || $v === '1') ? array(true, $v, '')
+                : array(false, '', sprintf(ap_t('EINST.W_SCHALTER'), $name, $v));
+        case 'host':
+            // Leer heisst: die oertliche USV.
+            return ($v === '' || preg_match('/^[A-Za-z0-9._-]+(:[0-9]{1,5})?\z/', $v) === 1)
+                ? array(true, $v, '')
+                : array(false, '', sprintf(ap_t('TEXT.HOST_UNGUELTIG'), $v));
+        case 'email_an':
+            // Ein oertlicher Benutzer (root) oder eine Adresse. Leerraum,
+            // Steuerzeichen und Anfuehrungszeichen werden abgewiesen, nicht
+            // entfernt; es faellt nichts auf root zurueck.
+            $ok = preg_match('/[\x00-\x20\x7F"\']/', $v) !== 1
+                && ((strpos($v, '@') === false && ap_benutzer_existiert($v))
+                    || filter_var($v, FILTER_VALIDATE_EMAIL) !== false);
+            return $ok ? array(true, $v, '')
+                : array(false, '', sprintf(ap_t('EINST.EMAIL_UNGUELTIG'), $v));
+        case 'themenpraefix':
+            return ap_praefix_gueltig($v) ? array(true, $v, '')
+                : array(false, '', sprintf(ap_t('MQTT.PRAEFIX_UNGUELTIG'), $v));
+        case 'rohfelder':
+            // Die Form, die das Formular speichert: Grossbuchstaben, Komma.
+            return ($v === '' || preg_match('/^[A-Z][A-Z0-9_]{0,31}(,[A-Z][A-Z0-9_]{0,31})*\z/', $v) === 1)
+                ? array(true, $v, '')
+                : array(false, '', sprintf(ap_t('EINST.W_ROHFELDER'), $name, $v));
+    }
+    if (isset($g[$k])) {
+        list($min, $max) = $g[$k];
+        if ($v !== '' && strlen($v) <= 9 && ctype_digit($v)
+            && (int) $v >= $min && (int) $v <= $max) {
+            return array(true, (string) (int) $v, '');
+        }
+        return array(false, '', sprintf(ap_t('EINST.W_ZAHL'), $name, $v, $min, $max));
+    }
+    return array(false, '', sprintf(ap_t('EINST.SICH_FREMD'), $k));
+}
+
+/** Mehrere Werte pruefen. Rueckgabe: array(gute Werte, Beanstandungen). */
+function ap_werte_pruefen($werte)
+{
+    $gut = array();
+    $mangel = array();
+    foreach ($werte as $k => $v) {
+        list($ok, $w, $text) = ap_wert_pruefen((string) $k, $v);
+        if ($ok) {
+            $gut[$k] = $w;
+        } else {
+            $mangel[] = $text;
+        }
+    }
+    return array($gut, $mangel);
+}
+
+/** Hinweis nach einem Speichern, das das Praefix wechselt oder MQTT abschaltet (M4). */
+function ap_praefix_wechsel_hinweis($alt, $neu)
+{
+    $ap = ap_praefix($alt);
+    $alt_an = ap_cfg($alt, 'mqtt', '1') === '1';
+    $neu_an = ap_cfg($neu, 'mqtt', '1') === '1';
+    if ($alt_an && (!$neu_an || ap_praefix($neu) !== $ap)) {
+        return sprintf(ap_t('MQTT.ALT_RAEUMEN'), $ap);
+    }
+    return '';
+}
+
+/**
+ * Eine Datei ganz schreiben: daneben, Rechte VOR dem Inhalt, Laenge und
+ * Ruecklesen pruefen, dann umbenennen (Regeln/03). false heisst: am alten
+ * Stand hat sich nichts geaendert.
+ */
+function ap_datei_schreiben($pfad, $inhalt, $modus)
+{
+    $ordner = dirname($pfad);
+    if (!is_dir($ordner)) {
+        @mkdir($ordner, 0775, true);
+    }
+    $neben = $pfad . '.neu' . getmypid();
+    $fh = @fopen($neben, 'wb');
+    if ($fh === false) {
+        return false;
+    }
+    @chmod($neben, $modus);
+    $n = @fwrite($fh, $inhalt);
+    $ok = ($n === strlen($inhalt)) && @fflush($fh);
+    $ok = @fclose($fh) && $ok;
+    if ($ok) {
+        $ok = (@file_get_contents($neben) === $inhalt);
+    }
+    if (!$ok || !@rename($neben, $pfad)) {
+        @unlink($neben);
+        return false;
+    }
+    return true;
+}
+
+/* ---------------- Einmalmeldung nach dem POST (U1) ----------------
+ * Regeln/04: jeder POST endet mit 303, das Ergebnis reist als Datei im
+ * Datenordner (0600, 120 s gueltig, beim naechsten GET gelesen und geloescht).
+ * Das Formularmerkmal steht darin nur als *** (Regeln/04, Nachtrag Raumklima
+ * 17.09.2026: die Einmalmeldung traegt kein Token). */
+function ap_meldung_datei()
+{
+    return ap_paths()['data'] . '/einmalmeldung.json';
+}
+
+function ap_meldung_ablegen($daten, $geheim)
+{
+    $daten['zeit'] = time();
+    $geheim = (string) $geheim;
+    if ($geheim !== '') {
+        array_walk_recursive($daten, function (&$w) use ($geheim) {
+            if (is_string($w)) {
+                $w = str_replace($geheim, '***', $w);
+            }
+        });
+    }
+    $js = json_encode($daten, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+                              | JSON_INVALID_UTF8_SUBSTITUTE);
+    return $js !== false && ap_datei_schreiben(ap_meldung_datei(), $js, 0600);
+}
+
+function ap_meldung_abholen()
+{
+    $f = ap_meldung_datei();
+    clearstatcache();
+    if (!is_file($f)) {
+        return null;
+    }
+    $d = json_decode((string) @file_get_contents($f), true);
+    @unlink($f);
+    if (!is_array($d) || !isset($d['zeit']) || abs(time() - (int) $d['zeit']) > 120) {
+        return null;
+    }
+    $liste = function ($s) use ($d) {
+        return (isset($d[$s]) && is_array($d[$s]))
+            ? array_values(array_filter($d[$s], 'is_string')) : array();
+    };
+    $text = function ($s) use ($d) {
+        return (isset($d[$s]) && is_string($d[$s])) ? $d[$s] : '';
+    };
+    return array(
+        'saved'       => !empty($d['saved']),
+        'fehler'      => $liste('fehler'),
+        'fehler_html' => $liste('fehler_html'),
+        'hinweise'    => $liste('hinweise'),
+        'test_titel'  => $text('test_titel'),
+        'test_text'   => $text('test_text'),
+    );
+}
+
+/**
+ * Die Abo-Datei des MQTT-Gateways (M9): config/plugins/<ordner>/mqtt_subscriptions.cfg
+ * mit <praefix>/#. Das Gateway liest sie selbst (am Geraet belegt am
+ * 13.09.2026 an Midea2Lox; Bauform eb_abo_datei(), Einspeisebremse 0.9.28).
+ * Geschrieben wird nur ein gueltiges Praefix und nur, wenn die Datei
+ * abweicht. Rueckgabe: array(Pfad, traegt das Abo).
+ */
+function ap_abo_datei($praefix, $schreiben = false)
+{
+    $pfad = dirname(ap_paths()['config']) . '/mqtt_subscriptions.cfg';
+    $soll = $praefix . '/#';
+    $roh = is_readable($pfad) ? (string) @file_get_contents($pfad) : '';
+    $da = in_array($soll, array_map('trim', preg_split('/\r?\n/', $roh)), true);
+    if ($schreiben && ap_praefix_gueltig($praefix) && $roh !== $soll . "\n"
+        && is_dir(dirname($pfad))) {
+        if (ap_datei_schreiben($pfad, $soll . "\n", 0644)) {
+            $da = true;
+        }
+    }
+    return array($pfad, $da);
+}
+
+/**
+ * Eine Adresse abrufen und den HTTP-Code aus den Kopfzeilen lesen (C8).
+ * Rueckgabe: array(Inhalt oder false, Code; 0 = kein Code erkennbar).
+ *
+ * Ueber fopen() und stream_get_meta_data() statt ueber die alte
+ * Kopfzeilen-Variable von PHP: 8.5 meldet sie schon beim Uebersetzen als
+ * ueberholt, und PHP 9 soll sie abschaffen - dann hiesse jeder Code 0 und die
+ * Pruefzeile "Endpunkt" stuende dauerhaft auf Kreuz. Bauform eb_http_abruf()
+ * (Einspeisebremse 0.9.26).
+ */
+function ap_http_abruf($url, $ctx)
+{
+    $fp = @fopen($url, 'r', false, $ctx);
+    if ($fp === false) {
+        return array(false, 0);
+    }
+    $meta = @stream_get_meta_data($fp);
+    $t = @stream_get_contents($fp);
+    @fclose($fp);
+    $code = 0;
+    $kopf = (is_array($meta) && isset($meta['wrapper_data']) && is_array($meta['wrapper_data']))
+        ? $meta['wrapper_data'] : array();
+    foreach ($kopf as $z) {
+        if (is_string($z) && preg_match('#^HTTP/\S+\s+([0-9]{3})#', $z, $m)) {
+            $code = (int) $m[1];
+        }
+    }
+    return array($t, $code);
 }

@@ -173,6 +173,134 @@ ALTLAST = ("service/online", "timestamp", "valid", "battery_age_months")
 ALTLAST_MERKER = os.path.join(DATA_DIR, "retain_altlast")
 
 
+# ---------------------------------------------------------------------------
+# Themenpraefix - EINE Stelle fuer Dienst und Leeren (M5, seit 1.2.14)
+# ---------------------------------------------------------------------------
+# Bis 1.2.13 setzten Oberflaeche, Dienst und Leeren das Praefix verschieden
+# zusammen: die Oberflaeche nahm "apcups/" an, der Dienst sendete darunter
+# apcups//alarm_level, und mqtt_leeren() schnitt den Schraegstrich ab, fragte
+# unter apcups/# und meldete "nichts zu leeren", waehrend 16 Themen stehen
+# blieben (in WSL gemessen, Durchgang 29.09.2026, Befund M5).
+PRAEFIX_VORGABE = "apcups"
+_PRAEFIX_MUSTER = re.compile(r"^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*\Z")
+
+
+def mqtt_praefix(cfg):
+    """Das Praefix, unter dem gesendet und geleert wird: der gespeicherte Wert,
+    unveraendert; leer heisst apcups (wie ap_praefix() in ap_lib.php)."""
+    return str((cfg or {}).get("themenpraefix") or "").strip() or PRAEFIX_VORGABE
+
+
+def praefix_gueltig(praefix):
+    """Darf der Dienst unter diesem Praefix senden? Dieselbe Regel wie
+    ap_praefix_gueltig() in ap_lib.php: Buchstaben, Ziffern, _ und -, Ebenen
+    durch EINEN Schraegstrich getrennt, keiner am Rand, kein # und kein +,
+    hoechstens 64 Zeichen."""
+    p = str(praefix or "")
+    return len(p) <= 64 and bool(_PRAEFIX_MUSTER.match(p))
+
+
+def praefix_abonnierbar(praefix):
+    """Laesst sich unter diesem Praefix abonnieren und leeren? Weiter gefasst
+    als praefix_gueltig(): damit raeumen Deinstallation und Dienst auch
+    Themen ab, die eine Vorfassung unter "apcups/" oder "/apcups" hinterliess."""
+    p = str(praefix or "")
+    return p != "" and "#" not in p and "+" not in p
+
+
+def eigene_auswahl(praefix):
+    """Nur die eigenen Themen unter <praefix>/: die Namen aus apc_themen.json
+    und die frueher behaltenen (ALTLAST). Ein fremdes Thema unter demselben
+    Praefix bleibt stehen."""
+    eigene = set(themen_schluessel()) | set(ALTLAST)
+
+    def auswahl(thema):
+        return thema.startswith(praefix + "/") and thema[len(praefix) + 1:] in eigene
+    return auswahl
+
+
+# Merker "unter diesen Praefixen koennen behaltene Themen liegen" (M4). Er
+# liegt im Konfigordner: die Upgrade-Sicherung nimmt ihn mit, und die
+# Deinstallation liest ihn, bevor LoxBerry den Ordner loescht. Eine Zeile je
+# Praefix. Der Dienst traegt sein Sendepraefix ein und raeumt jedes andere ab,
+# sobald er es liest - beim Start und nach jedem Neueinlesen. Bis 1.2.13
+# blieben beim Praefixwechsel alle 19 retained Themen unter dem alten Praefix
+# fuer immer stehen, ebenso beim Ausschalten von MQTT (Befund M4).
+PRAEFIX_MERKER = os.path.join(CONFIG_DIR, "mqtt_praefixe")
+
+
+def praefix_merker_lesen():
+    try:
+        with open(PRAEFIX_MERKER, "r", encoding="utf-8") as fh:
+            zeilen = [z.strip() for z in fh.read().splitlines()]
+    except OSError:
+        return []
+    aus = []
+    for z in zeilen:
+        if z and z not in aus:
+            aus.append(z)
+    return aus
+
+
+def praefix_merker_schreiben(liste):
+    """Die Liste schreiben (daneben, dann umbenennen); leer = Datei weg."""
+    if not liste:
+        try:
+            os.unlink(PRAEFIX_MERKER)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return False
+        return True
+    return _klein_schreiben(PRAEFIX_MERKER, "".join(p + "\n" for p in liste), 0o644)
+
+
+# Die Abo-Datei des MQTT-Gateways (M9): config/plugins/<ordner>/mqtt_subscriptions.cfg.
+# Das Gateway liest sie selbst und abonniert jede Zeile (am Geraet belegt am
+# 13.09.2026 an Midea2Lox; Bauform Einspeisebremse 0.9.28). Bis 1.2.13 gab es
+# sie nicht, und am Geraet fehlte das Abo am 06.09.2026 genau fuer diese Linie.
+ABO_DATEI = os.path.join(CONFIG_DIR, "mqtt_subscriptions.cfg")
+
+
+def abo_datei_nachfuehren(praefix):
+    """<praefix>/# eintragen, nur wenn die Datei abweicht und das Praefix
+    gueltig ist. Rueckgabe: True geschrieben, False nicht noetig, None
+    gescheitert."""
+    if not praefix_gueltig(praefix):
+        return False
+    soll = praefix + "/#\n"
+    try:
+        with open(ABO_DATEI, "r", encoding="utf-8") as fh:
+            if fh.read() == soll:
+                return False
+    except OSError:
+        pass
+    return True if _klein_schreiben(ABO_DATEI, soll, 0o644) else None
+
+
+def _klein_schreiben(pfad, inhalt, modus):
+    """Eine kleine Datei ganz schreiben: daneben, Rechte vor dem Inhalt,
+    zuruecklesen, dann umbenennen."""
+    neben = "{0}.neu{1}".format(pfad, os.getpid())
+    try:
+        os.makedirs(os.path.dirname(pfad), exist_ok=True)
+        with open(neben, "w", encoding="utf-8") as fh:
+            os.chmod(neben, modus)
+            fh.write(inhalt)
+            fh.flush()
+        with open(neben, "r", encoding="utf-8") as fh:
+            if fh.read() != inhalt:
+                raise OSError("Ruecklesen weicht ab")
+        os.replace(neben, pfad)
+        return True
+    except OSError:
+        try:
+            os.unlink(neben)
+        except OSError:
+            pass
+        return False
+
+
 def altlast_kennung(praefix):
     return "apc-altlast-1|{0}|{1}".format(praefix, ",".join(sorted(ALTLAST)))
 
@@ -360,6 +488,23 @@ def retain_themen():
 
 # Themen, die nicht aus messwerte() kommen, sondern der Dienst selbst setzt.
 DIENST_THEMEN = ("timestamp", "valid", "service/online", "event", "last_error")
+
+# Die Zustaende der USV, die bei einer gescheiterten Abfrage auf "keine
+# Aussage" fallen (M2, Entscheidung 5): sie gehen dann als "-" retained
+# hinaus, nie als stehenbleibender Altwert. Die Stammdaten (Modell,
+# Seriennummer, Einbaudatum, Nennwerte, Abschaltschwellen, Selbsttest) und
+# das letzte Ereignis bleiben stehen - sie aendern sich nicht dadurch, dass
+# apcupsd gerade nicht antwortet.
+ZUSTAND_THEMEN = ("status", "data_valid", "comm_lost", "on_line", "on_battery",
+                  "alarm_level", "shutdown_pending", "status_flag", "replace_battery")
+
+
+def zeitbezug_themen():
+    """Die Messwerte mit Zeitbezug: was messwerte() liefert und nicht retained
+    ist (battery_charge, time_left, line_voltage, load_percent, ...). Bei
+    abgerissener Verbindung zur USV gehen sie nicht hinaus (M3, Regeln/07
+    "bei Stoerung nur das Signal")."""
+    return frozenset(set(messwerte({}, {})) - retain_themen())
 
 
 # ---------------------------------------------------------------------------
@@ -950,10 +1095,18 @@ def mqtt_zugangsdaten():
     return None
 
 
-# Klartext zu den Rueckgabecodes eines CONNACK (MQTT 3.1.1).
+# Klartext zu den Rueckgabecodes eines CONNACK. paho 1.x meldet die Codes
+# von MQTT 3.1.1 (1-5), paho 2.x die Ursachencodes von MQTT 5 (132-136) - am
+# Geraet laeuft das System-Python mit paho 2.1.0 (gemessen 13.09.2026). Bis
+# 1.2.13 standen nur 1-5 hier, und ausgerechnet ein falsches Kennwort hiess
+# unter paho 2.x "unbekannter Grund" (Befund M6). Paare wie in
+# Werkzeuge/connack_klartext_pruefen.py.
 CONNACK_TEXT = {1: "Protokollfassung abgelehnt", 2: "Client-Kennung abgelehnt",
                 3: "Broker nicht verfuegbar", 4: "Benutzername oder Kennwort falsch",
-                5: "nicht berechtigt"}
+                5: "nicht berechtigt",
+                132: "Protokollfassung abgelehnt", 133: "Client-Kennung abgelehnt",
+                136: "Broker nicht verfuegbar", 134: "Benutzername oder Kennwort falsch",
+                135: "nicht berechtigt"}
 
 
 def broker_leeren(praefix, auswahl, warten=1.5, nach_loeschen=None):
@@ -985,8 +1138,10 @@ def broker_leeren(praefix, auswahl, warten=1.5, nach_loeschen=None):
     (Pruefung-APC-UPS-1.2.13, Faelle A1 bis A10, U1, U2).
     """
     erg = {"rc": 2, "geleert": [], "rest": [], "grund": ""}
-    praefix = str(praefix or "").strip("/")
-    if not praefix or "#" in praefix or "+" in praefix:
+    # Unveraendert, nicht mehr .strip("/"): gefragt wird genau unter dem
+    # Praefix, unter dem gesendet wurde (M5).
+    praefix = str(praefix or "")
+    if not praefix_abonnierbar(praefix):
         erg["grund"] = "das Themenpraefix '{0}' taugt nicht fuer ein Abonnement".format(praefix)
         return erg
     try:

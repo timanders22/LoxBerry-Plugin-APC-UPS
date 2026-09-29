@@ -84,17 +84,11 @@ function ap_endpunkt_pruefen()
     // die stuende sonst mitten in der Seite - die Oberflaeche laeuft mit
     // display_errors=1. Der Rueckgabewert wird unmittelbar darunter
     // ausgewertet; unterdrueckt wird die Ausgabe, nicht der Befund.
-    $rumpf = @file_get_contents($url, false, $ctx);
+    // C8 (1.2.14): ueber ap_http_abruf() (fopen, stream_get_meta_data) statt
+    // ueber die alte Kopfzeilen-Variable, die PHP 8.5 als ueberholt meldet.
+    list($rumpf, $code) = ap_http_abruf($url, $ctx);
     if ($rumpf === false) {
         return array(null, sprintf(ap_t('TEST.EP_KEINE_ANTWORT'), $url));
-    }
-    $code = 0;
-    if (isset($http_response_header) && is_array($http_response_header)) {
-        foreach ($http_response_header as $z) {
-            if (preg_match('#^HTTP/\S+\s+(\d{3})#', $z, $m)) {
-                $code = (int) $m[1];
-            }
-        }
     }
     if ($code === 200 && strpos($rumpf, 'SELFTEST;OK=1') !== false) {
         return array(true, ap_e(sprintf(ap_t('TEST.EP_OK'), $url)));
@@ -140,6 +134,46 @@ function ap_themen_kongruenz()
     }
     return array(false, ap_e(sprintf(ap_t('TEST.TH_ABWEICHUNG'),
         implode(', ', array_unique($abw)))));
+}
+
+/**
+ * Wie viele Formulare der Oberflaeche tragen das Merkmal ap_form? (U4)
+ *
+ * Gezaehlt wird im QUELLTEXT von index.php und ap_test.php: je Formular der
+ * Abschnitt vom oeffnenden bis zum schliessenden form-Tag, und er traegt das
+ * Merkmal, wenn darin das versteckte Feld steht oder der Vorlauf $ap_ftok,
+ * der es mitbringt. Das Suchmuster ist zusammengesetzt, und kein Kommentar
+ * dieser Datei schreibt das Tag aus - sonst zaehlte sie sich selbst mit. Rueckgabe: array(Formulare, davon mit Merkmal) oder null,
+ * wenn keine Quelle lesbar war. Diese Zeile haette Befund B1 gefunden: bis
+ * 1.2.13 trugen 15 von 17 Formularen das Merkmal, die beiden der Sicherung
+ * nicht.
+ */
+function ap_formulare_zaehlen($dateien = null)
+{
+    if ($dateien === null) {
+        $dateien = array(__DIR__ . '/index.php', __FILE__);
+    }
+    $muster = '#<' . 'form\b.*?</' . 'form>#si';
+    $gelesen = false;
+    $n = 0;
+    $mit = 0;
+    foreach ($dateien as $datei) {
+        $q = @file_get_contents($datei);
+        if (!is_string($q)) {
+            continue;
+        }
+        $gelesen = true;
+        if (!preg_match_all($muster, $q, $m)) {
+            continue;
+        }
+        foreach ($m[0] as $f) {
+            $n++;
+            if (strpos($f, 'name="ap_form"') !== false || strpos($f, '$ap_ftok') !== false) {
+                $mit++;
+            }
+        }
+    }
+    return $gelesen ? array($n, $mit) : null;
 }
 
 function ap_test_selbstpruefung($cfg, $w, $pid, $alter, $broker, $autostart)
@@ -295,7 +329,10 @@ function ap_test_selbstpruefung($cfg, $w, $pid, $alter, $broker, $autostart)
     }
 
     $paho = trim(ap_sh('python3 -c "import paho.mqtt.client" >/dev/null 2>&1 && echo ja || echo nein'));
-    ap_pruefzeile(ap_t('TEST.F_PAHO'), $zaehle($paho === 'ja'), ap_e($paho));
+    // U6: die Antwort der Schale ist ja/nein - angezeigt wird das Wort der
+    // eingestellten Sprache (bis 1.2.13 stand "nein" in der englischen Seite).
+    ap_pruefzeile(ap_t('TEST.F_PAHO'), $zaehle($paho === 'ja'),
+        ap_e($paho === 'ja' ? ap_t('ALLGEMEIN.JA') : ap_t('ALLGEMEIN.NEIN')));
 
     // --- Die eigene Bauart -------------------------------------------------
     ap_pruefzeile(ap_t('TEST.F_THEMENDATEI'), $zaehle($themen ? true : false),
@@ -316,10 +353,17 @@ function ap_test_selbstpruefung($cfg, $w, $pid, $alter, $broker, $autostart)
     $ok = simplexml_load_string($vinhalt) !== false;
     libxml_clear_errors();
     libxml_use_internal_errors($vorher);
-    ap_pruefzeile(ap_t('TEST.F_VORLAGE'), $zaehle($ok),
-        $ok ? ap_e(sprintf(ap_t('TEST.A_VORLAGE'), $vname,
-                  count(ap_vorlage_themen()), count(ap_text_themen())))
-            : ap_e(ap_t('TEST.A_VORLAGE_KAPUTT')));
+    // U5 (1.2.14): eine wohlgeformte Vorlage ohne einen einzigen Eingang ist
+    // nutzlos - bis 1.2.13 stand dann ein Haken ("0 Eingaenge").
+    $n_ein = count(ap_vorlage_themen());
+    if (!$ok) {
+        $vtext = ap_t('TEST.A_VORLAGE_KAPUTT');
+    } elseif ($n_ein === 0) {
+        $vtext = sprintf(ap_t('TEST.A_VORLAGE_LEER'), $vname);
+    } else {
+        $vtext = sprintf(ap_t('TEST.A_VORLAGE'), $vname, $n_ein, count(ap_text_themen()));
+    }
+    ap_pruefzeile(ap_t('TEST.F_VORLAGE'), $zaehle($ok && $n_ein > 0), ap_e($vtext));
 
     // Alle DREI Stellen gegeneinander: die Positivliste $ap_reiter, die
     // ausgeschriebene Leiste (data-ziel) und die Bereichs-ids.
@@ -341,13 +385,48 @@ function ap_test_selbstpruefung($cfg, $w, $pid, $alter, $broker, $autostart)
     ap_pruefzeile(ap_t('TEST.F_REITER'), $zaehle($kongruent),
         ap_e(sprintf(ap_t('TEST.A_REITER'), count($namen), count($y[1]), count($z2[1]))));
 
+    // Tragen alle Formulare das Merkmal? (U4, Pflichtzeile nach Regeln/04)
+    $fz = ap_formulare_zaehlen();
+    if ($fz === null || $fz[0] === 0) {
+        ap_pruefzeile(ap_t('TEST.F_FORMULARE'), $zaehle(null),
+            ap_e(ap_t('TEST.A_FORMULARE_UNLESBAR')));
+    } else {
+        ap_pruefzeile(ap_t('TEST.F_FORMULARE'), $zaehle($fz[1] === $fz[0]),
+            ap_e(sprintf(ap_t('TEST.A_FORMULARE'), $fz[1], $fz[0])));
+    }
+
     // Der Waechter - ohne ihn laeuft ein gestorbener Dienst nicht wieder an.
-    $wacht = is_file(dirname(dirname(__DIR__)) . '/cron/cron.05min');
-    // Beide Schluessel ausgeschrieben, nicht ueber einen Bedingungsausdruck
-    // in ap_t() hinein: der Sprachpruefer findet nur woertliche Aufrufe und
-    // meldete sie sonst als unbenutzt.
-    $wtext = $wacht ? ap_t('TEST.A_WAECHTER_DA') : ap_t('TEST.A_WAECHTER_UNBEKANNT');
-    ap_pruefzeile(ap_t('TEST.F_WAECHTER'), $zaehle($wacht ? true : null), ap_e($wtext));
+    //
+    // U3 (1.2.14): gesucht wird dort, wo LoxBerry ihn ausfuehrt:
+    // <Wurzel>/system/cron/cron.*/<Name>. Bis 1.2.13 fragte die Zeile nach
+    // cron/cron.05min NEBEN dem Plugin - installiert liegt dort nichts, und
+    // die Zeile zeigte auf dem Geraet immer den Punkt, im ausgepackten Archiv
+    // aber einen Haken fuer etwas nicht Gemessenes (Befund B9). Jetzt: Haken,
+    // wenn der Eintrag da ist; Kreuz, wenn er in einer Installation fehlt;
+    // Punkt nur ausserhalb einer Installation.
+    if ($p['home'] === '') {
+        ap_pruefzeile(ap_t('TEST.F_WAECHTER'), $zaehle(null),
+            ap_e(ap_t('TEST.A_WAECHTER_UNBEKANNT')));
+    } else {
+        $wtreffer = array();
+        foreach (array_unique(array($p['plugin'], 'apc_ups_ng')) as $wname) {
+            $wliste = glob($p['home'] . '/system/cron/cron.*/' . $wname);
+            foreach (is_array($wliste) ? $wliste : array() as $wf) {
+                if (is_file($wf)) {
+                    $wtreffer[] = $wf;
+                }
+            }
+        }
+        if ($wtreffer) {
+            ap_pruefzeile(ap_t('TEST.F_WAECHTER'), $zaehle(true),
+                ap_e(sprintf(ap_t('TEST.A_WAECHTER_DA'),
+                     substr($wtreffer[0], strlen($p['home']) + 1))));
+        } else {
+            ap_pruefzeile(ap_t('TEST.F_WAECHTER'), $zaehle(false),
+                ap_e(sprintf(ap_t('TEST.A_WAECHTER_FEHLT'),
+                     'system/cron/cron.05min/' . $p['plugin'])));
+        }
+    }
 
     echo '</table></div>';
 

@@ -102,6 +102,10 @@ function ap_aktiv($id)
 $ap_saved     = false;
 $ap_fehler    = array();   // harte Beanstandungen
 $ap_hinweise  = array();   // Meldungen, die das Speichern nicht verhindern
+// Meldungen MIT Auszeichnung, schon maskiert zusammengesetzt (U2): bis 1.2.13
+// lief "Die Datei wurde <b>nicht</b> uebernommen" durch ap_e() und stand mit
+// sichtbaren Tags auf der Seite.
+$ap_fehler_html = array();
 
 list($ap_cfg, $ap_altformat) = ap_config_read();
 
@@ -133,6 +137,8 @@ $ap_formtoken = ap_roh($ap_cfg, 'formtoken');
  * Warnung. Form wie im uebrigen Bestand (13.09.2026). */
 $ap_ist_post = (isset($_SERVER['REQUEST_METHOD'])
                 && $_SERVER['REQUEST_METHOD'] === 'POST');
+// Auch ein abgewiesener POST endet mit der Umleitung (U1).
+$ap_war_post = $ap_ist_post;
 if ($ap_ist_post) {
     $mit = isset($_POST['ap_form']) ? (string) $_POST['ap_form'] : '';
     if ($ap_formtoken === '' || !hash_equals($ap_formtoken, $mit)) {
@@ -180,6 +186,21 @@ if ($ap_ist_post && isset($_POST['download'])) {
 /* ============ Test-Aktionen ============ */
 $ap_test_titel = '';
 $ap_test_text = '';
+
+/* Die Einmalmeldung des vorigen POST (U1) - NUR beim GET, gelesen und sofort
+ * geloescht: ein Neuladen zeigt sie nicht noch einmal und schickt nichts
+ * erneut. */
+if (!$ap_war_post) {
+    $ap_einmal = ap_meldung_abholen();
+    if ($ap_einmal !== null) {
+        $ap_saved       = $ap_einmal['saved'];
+        $ap_fehler      = array_merge($ap_fehler, $ap_einmal['fehler']);
+        $ap_fehler_html = $ap_einmal['fehler_html'];
+        $ap_hinweise    = array_merge($ap_hinweise, $ap_einmal['hinweise']);
+        $ap_test_titel  = $ap_einmal['test_titel'];
+        $ap_test_text   = $ap_einmal['test_text'];
+    }
+}
 if ($ap_ist_post && isset($_POST['test'])) {
     require_once __DIR__ . '/ap_test.php';
     list($ap_test_titel, $ap_test_text) = ap_test_ausfuehren((string) $_POST['test']);
@@ -188,56 +209,30 @@ if ($ap_ist_post && isset($_POST['test'])) {
 
 /* ============ Speichern: Einstellungen ============ */
 if ($ap_ist_post && isset($_POST['save'])) {
-    $neu = $ap_cfg;
-    $saeubern = function ($s) {
-        // Nur Steuerzeichen und Anfuehrungszeichen entfernen. Eine
-        // Positivliste wuerde eingefuegte Adressen zerstoeren.
-        $s = preg_replace('/[\x00-\x1F\x7F"\']+/u', '', (string) $s);
-        return trim($s);
-    };
-    $ganz = function ($wert, $vorgabe, $min, $max) {
-        if (!is_numeric($wert)) {
-            return (string) $vorgabe;
-        }
-        $n = (int) $wert;
-        return ($n >= $min && $n <= $max) ? (string) $n : (string) $vorgabe;
-    };
-
-    $neu['enabled']          = isset($_POST['enabled']) ? '1' : '0';
-    $neu['benachrichtigung'] = isset($_POST['benachrichtigung']) ? '1' : '0';
-    $neu['email']            = isset($_POST['email']) ? '1' : '0';
-
-    $an = $saeubern(isset($_POST['email_an']) ? $_POST['email_an'] : '');
-    // Der ganze Domainteil war frueher optional. Damit ging zwar der
-    // beabsichtigte oertliche Empfaenger "root" durch - aber genauso jeder
-    // Vertipper wie "meine_email", der dann kommentarlos an sendmail wanderte
-    // und nirgends ankam.
-    if (strpos($an, '@') === false && ap_benutzer_existiert($an)) {
-        $neu['email_an'] = $an;                       // oertlicher Benutzer
-    } elseif (filter_var($an, FILTER_VALIDATE_EMAIL)) {
-        $neu['email_an'] = $an;
-    } else {
-        $neu['email_an'] = 'root';
-        if ($an !== '') {
-            $ap_hinweise[] = ap_t('EINST.EMAIL_UNGUELTIG');
-        }
+    /* C7 (1.2.14): beanstanden statt zurechtbiegen. Bis 1.2.13 entfernte der
+     * Handler Anfuehrungszeichen still, kuerzte 100.4 auf 100, setzte einen
+     * Wert ausserhalb der Grenzen auf die VORGABE, und ein Tippfehler im Host
+     * loeschte den gespeicherten Host (Befund B8, gemessen 29.09.2026). Jetzt
+     * laeuft jedes Feld durch ap_wert_pruefen() - dieselbe Pruefung wie beim
+     * Zurueckspielen -, und bei EINER Beanstandung wird nichts gespeichert.
+     * Abgeschnitten wird nur Leerraum am Rand. */
+    $eingabe = array(
+        'enabled'          => isset($_POST['enabled']) ? '1' : '0',
+        'benachrichtigung' => isset($_POST['benachrichtigung']) ? '1' : '0',
+        'email'            => isset($_POST['email']) ? '1' : '0',
+    );
+    foreach (array('intervall', 'aktualisierung', 'host', 'vorwarn_min',
+                   'vorwarn_prozent', 'log_kb', 'email_an') as $ap_k) {
+        $ap_v = isset($_POST[$ap_k]) ? $_POST[$ap_k] : '';
+        $eingabe[$ap_k] = is_string($ap_v) ? trim($ap_v) : $ap_v;
     }
-
-    $neu['intervall']      = $ganz(isset($_POST['intervall']) ? $_POST['intervall'] : '', 30, 5, 3600);
-    $neu['aktualisierung'] = $ganz(isset($_POST['aktualisierung']) ? $_POST['aktualisierung'] : '', 300, 5, 86400);
-    $neu['vorwarn_min']    = $ganz(isset($_POST['vorwarn_min']) ? $_POST['vorwarn_min'] : '', 5, 0, 600);
-    $neu['vorwarn_prozent'] = $ganz(isset($_POST['vorwarn_prozent']) ? $_POST['vorwarn_prozent'] : '', 10, 0, 100);
-    $neu['log_kb']         = $ganz(isset($_POST['log_kb']) ? $_POST['log_kb'] : '', 512, 32, 20480);
-
-    // Nur Rechnername oder Adresse, notfalls mit Port. Kein Leerzeichen,
-    // damit nichts an apcaccess durchgereicht wird, was dort nicht hingehoert.
-    $host = $saeubern(isset($_POST['host']) ? $_POST['host'] : '');
-    $neu['host'] = preg_match('/^[A-Za-z0-9._-]+(:[0-9]{1,5})?$/', $host) ? $host : '';
-    if ($host !== '' && $neu['host'] === '') {
-        $ap_hinweise[] = ap_t('TEXT.HOST_UNGUELTIG');
-    }
-
-    if (ap_config_write($neu)) {
+    list($ap_gut, $ap_mangel) = ap_werte_pruefen($eingabe);
+    if ($ap_mangel) {
+        $ap_fehler[] = ap_t('EINST.NICHT_GESPEICHERT');
+        foreach ($ap_mangel as $ap_m) {
+            $ap_fehler[] = $ap_m;
+        }
+    } elseif (ap_config_write(array_merge($ap_cfg, $ap_gut))) {
         $ap_saved = true;
         // 'uebernehmen': neu starten, damit die Einstellungen gelten - einen
         // mit "Dienst anhalten" angehaltenen Dienst aber nicht (bis 1.2.12
@@ -261,19 +256,18 @@ if ($ap_ist_post && isset($_POST['save'])) {
  * im Reiter MQTT. Zwei Formulare mit demselben Knopfnamen brauchen ein
  * Formularkennzeichen; deshalb heisst dieser Knopf save_mqtt. */
 if ($ap_ist_post && isset($_POST['save_mqtt'])) {
-    $neu = $ap_cfg;
-    $neu['mqtt'] = isset($_POST['mqtt']) ? '1' : '0';
+    $eingabe = array('mqtt' => isset($_POST['mqtt']) ? '1' : '0');
 
-    $roh = trim((string) (isset($_POST['themenpraefix']) ? $_POST['themenpraefix'] : ''));
-    $praefix = preg_replace('/[^A-Za-z0-9_\/-]+/', '', $roh);
-    if ($roh !== '' && $praefix !== $roh) {
-        $ap_hinweise[] = ap_t('MQTT.PRAEFIX_GEAENDERT');
-    }
-    $neu['themenpraefix'] = $praefix !== '' ? $praefix : 'apcups';
+    /* M5 (1.2.14): das Praefix wird abgewiesen, nicht gesaeubert. Bis 1.2.13
+     * wurden unzulaessige Zeichen still entfernt, und "apcups/" oder "/apcups"
+     * gingen durch - der Dienst sendete dann unter apcups//..., und die
+     * Deinstallation fand nichts (Befund M5). Regel: ap_praefix_gueltig(). */
+    $ap_v = isset($_POST['themenpraefix']) ? $_POST['themenpraefix'] : '';
+    $eingabe['themenpraefix'] = is_string($ap_v) ? trim($ap_v) : $ap_v;
 
     // Rohfelder: abweisen und MELDEN, nicht stillschweigend wegschneiden.
     $rf_roh = trim((string) (isset($_POST['rohfelder']) ? $_POST['rohfelder'] : ''));
-    $gut = array();
+    $rf_gut = array();
     $schlecht = array();
     foreach (preg_split('/[,;\s]+/', $rf_roh) as $stueck) {
         $s = strtoupper(trim($stueck));
@@ -281,8 +275,8 @@ if ($ap_ist_post && isset($_POST['save_mqtt'])) {
             continue;
         }
         if (preg_match('/^[A-Z][A-Z0-9_]{0,31}$/', $s)) {
-            if (!in_array($s, $gut, true)) {
-                $gut[] = $s;
+            if (!in_array($s, $rf_gut, true)) {
+                $rf_gut[] = $s;
             }
         } else {
             $schlecht[] = trim($stueck);
@@ -293,28 +287,45 @@ if ($ap_ist_post && isset($_POST['save_mqtt'])) {
         // zweites Feld nicht eintragen, bevor das erste stimmt.
         $ap_hinweise[] = sprintf(ap_t('MQTT.ROHFELD_ABGEWIESEN'), implode(', ', $schlecht));
     }
-    $neu['rohfelder'] = implode(',', $gut);
+    $eingabe['rohfelder'] = implode(',', $rf_gut);
 
-    if (ap_config_write($neu)) {
-        $ap_saved = true;
-        // 'uebernehmen': neu starten, damit die Einstellungen gelten - einen
-        // mit "Dienst anhalten" angehaltenen Dienst aber nicht (bis 1.2.12
-        // startete jedes Speichern ihn wieder; Pruefung-APC-UPS-1.2.13, S4).
-        ap_dienst('uebernehmen');
-        if (ap_angehalten()) {
-            $ap_hinweise[] = ap_t('TEXT.DIENST_ANGEHALTEN');
-        } else {
-            $ap_hinweise[] = ap_dienst_pid()
-                ? ap_t('TEXT.DIENST_NEU_GESTARTET')
-                : ap_t('TEXT.DIENST_LAEUFT_NICHT');
+    list($ap_gut, $ap_mangel) = ap_werte_pruefen($eingabe);
+    if ($ap_mangel) {
+        $ap_fehler[] = ap_t('EINST.NICHT_GESPEICHERT');
+        foreach ($ap_mangel as $ap_m) {
+            $ap_fehler[] = $ap_m;
         }
-        list($ap_cfg, $ap_altformat) = ap_config_read();
     } else {
-        $ap_fehler[] = ap_t('TEXT.SCHREIBFEHLER') . ' ' . $ap_p['config'];
+        $neu = array_merge($ap_cfg, $ap_gut);
+        if (ap_config_write($neu)) {
+            $ap_saved = true;
+            // M9: die Abo-Datei des Gateways folgt dem Praefix.
+            ap_abo_datei(ap_praefix($neu), true);
+            // M4: unter dem bisherigen Praefix raeumt der Dienst ab.
+            $ap_h = ap_praefix_wechsel_hinweis($ap_cfg, $neu);
+            if ($ap_h !== '') {
+                $ap_hinweise[] = $ap_h;
+            }
+            // 'uebernehmen': neu starten, damit die Einstellungen gelten - einen
+            // mit "Dienst anhalten" angehaltenen Dienst aber nicht (bis 1.2.12
+            // startete jedes Speichern ihn wieder; Pruefung-APC-UPS-1.2.13, S4).
+            ap_dienst('uebernehmen');
+            if (ap_angehalten()) {
+                $ap_hinweise[] = ap_t('TEXT.DIENST_ANGEHALTEN');
+            } else {
+                $ap_hinweise[] = ap_dienst_pid()
+                    ? ap_t('TEXT.DIENST_NEU_GESTARTET')
+                    : ap_t('TEXT.DIENST_LAEUFT_NICHT');
+            }
+            list($ap_cfg, $ap_altformat) = ap_config_read();
+        } else {
+            $ap_fehler[] = ap_t('TEXT.SCHREIBFEHLER') . ' ' . $ap_p['config'];
+        }
     }
 }
 
-$ap_praefix = ap_cfg($ap_cfg, 'themenpraefix', 'apcups');
+// Aus EINER Stelle wie Dienst und Leeren (M5).
+$ap_praefix = ap_praefix($ap_cfg);
 $ap_pid     = ap_dienst_pid();
 $ap_status  = ap_status();
 $ap_alter   = ap_status_alter();
@@ -344,17 +355,20 @@ $ap_frame = class_exists('LBWeb', false);
 
 /* ---------------- Einstellungen sichern ----------------
  *
- * Ausgegeben wird die VOLLE Konfiguration - samt Aktionstoken. Ohne ihn
- * stuenden nach dem Zurueckspielen alle Felder richtig, und das Plugin
- * kaeme trotzdem nicht an die Anlage; die Datei waere wertlos. Damit
- * traegt sie ein Geheimnis, und der Hinweis am Knopf sagt das. */
+ * C2 (1.2.14): gebaut aus ap_config_read(), OHNE formtoken und mit einem
+ * lesbaren _-Kopf (ap_sicherung_json). Bis 1.2.13 stand hier apc_konfig() -
+ * eine Funktion, die es nur im Endpunkt gibt (webfrontend/html/index.php) und
+ * die nur host liefert: jeder Klick endete mit "Call to undefined function"
+ * (gemessen unter 7.4, 8.4 und 8.5, Befund B2). Zugangsdaten kennt diese
+ * Konfiguration nicht - der Broker steht in general.json -, und das
+ * Formularmerkmal gehoert nicht in die Sicherung (CLAUDE.md 9). */
 if ($ap_ist_post && isset($_POST['ap_sichern'])) {
-    $ap_js = json_encode(apc_konfig(),
-        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $ap_js = ap_sicherung_json($ap_cfg);
     if ($ap_js !== false) {
         header('Content-Type: application/json; charset=utf-8');
         header('Content-Disposition: attachment; filename="apc_einstellungen_'
                . date('Ymd_His') . '.json"');
+        header('Content-Length: ' . strlen($ap_js));
         echo $ap_js;
         exit;
     }
@@ -367,25 +381,71 @@ if ($ap_ist_post && isset($_POST['ap_sichern'])) {
  * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
  * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
 if ($ap_ist_post && isset($_POST['ap_zurueck'])) {
-    if (!isset($_FILES['ap_sicherung']) || !is_array($_FILES['ap_sicherung'])
-        || !isset($_FILES['ap_sicherung']['tmp_name'])
-        || !@is_uploaded_file($_FILES['ap_sicherung']['tmp_name'])) {
+    /* C3 (1.2.14): Grenze 64 kB (Regeln/05), jeder Wert geprueft wie beim
+     * Speichern (ap_sicherung_lesen), die Erfolgsmeldung wird ausgegeben (bis
+     * 1.2.13 landete sie in einer Liste, die nie jemand ausgab), und ein
+     * laufender Dienst wird nachgezogen. */
+    $ap_datei = (isset($_FILES['ap_sicherung']) && is_array($_FILES['ap_sicherung']))
+        ? $_FILES['ap_sicherung'] : array();
+    $ap_tmp = (isset($ap_datei['tmp_name']) && is_string($ap_datei['tmp_name']))
+        ? $ap_datei['tmp_name'] : '';
+    if ($ap_tmp === '' || !@is_uploaded_file($ap_tmp)) {
         $ap_fehler[] = ap_t('EINST.SICH_KEINE_DATEI');
-    } elseif ((int) $_FILES['ap_sicherung']['size'] > 262144) {
+    } elseif ((int) @filesize($ap_tmp) > 65536) {
         $ap_fehler[] = ap_t('EINST.SICH_ZU_GROSS');
     } else {
         list($ap_neu, $ap_mangel, $ap_n) = ap_sicherung_lesen(
-            (string) @file_get_contents($_FILES['ap_sicherung']['tmp_name']));
+            (string) @file_get_contents($ap_tmp, false, null, 0, 65537), $ap_cfg);
         if ($ap_neu === null) {
             /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
-             * nichts. */
-            $ap_fehler[] = ap_t('EINST.SICH_ABGELEHNT') . ' '
-                            . implode(' ', $ap_mangel);
+             * nichts. Der Satz traegt Auszeichnung, die Beanstandungen sind
+             * Klartext und werden hier EINMAL maskiert. */
+            $ap_fehler_html[] = ap_t('EINST.SICH_ABGELEHNT') . ' '
+                              . ap_e(implode(' ', $ap_mangel));
         } elseif (ap_config_write($ap_neu)) {
-            $ap_meldungen[] = sprintf(ap_t('EINST.SICH_UEBERNOMMEN'), $ap_n);
+            $ap_hinweise[] = sprintf(ap_t('EINST.SICH_UEBERNOMMEN'), $ap_n);
+            ap_abo_datei(ap_praefix($ap_neu), true);
+            $ap_h = ap_praefix_wechsel_hinweis($ap_cfg, $ap_neu);
+            if ($ap_h !== '') {
+                $ap_hinweise[] = $ap_h;
+            }
+            if (ap_angehalten()) {
+                $ap_hinweise[] = ap_t('TEXT.DIENST_ANGEHALTEN');
+            } elseif (ap_dienst_pid() > 0) {
+                ap_dienst('uebernehmen');
+                $ap_hinweise[] = ap_dienst_pid()
+                    ? ap_t('TEXT.DIENST_NEU_GESTARTET')
+                    : ap_t('TEXT.DIENST_LAEUFT_NICHT');
+            } else {
+                $ap_hinweise[] = ap_t('EINST.SICH_DIENST_NICHT');
+            }
+            list($ap_cfg, $ap_altformat) = ap_config_read();
+            $ap_praefix = ap_praefix($ap_cfg);
         } else {
             $ap_fehler[] = ap_t('EINST.SICH_SCHREIBFEHLER');
         }
+    }
+}
+
+/* ---------------- Nach dem POST: umleiten (U1) ----------------
+ * Regeln/04: jeder POST-Handler endet mit einer Umleitung. Bis 1.2.13 wurde
+ * die Seite direkt nach dem POST gerendert (0 von 18 Antworten mit 303,
+ * Befund B7): ein Neuladen wiederholte Speichern, Neustart und "Dienst
+ * anhalten" samt Merker. Das Ergebnis reist als Einmalmeldung; das
+ * Formularmerkmal steht darin nur als ***. Die Downloads (Vorlage, Sicherung)
+ * sind oben schon mit exit beendet. Auch ein abgewiesener POST (falsches
+ * Merkmal) leitet um. Laesst sich die Einmalmeldung nicht ablegen, wird wie
+ * bisher direkt gerendert - sonst ginge die Meldung verloren. */
+if ($ap_war_post) {
+    if (ap_meldung_ablegen(array(
+            'saved'       => $ap_saved,
+            'fehler'      => $ap_fehler,
+            'fehler_html' => $ap_fehler_html,
+            'hinweise'    => $ap_hinweise,
+            'test_titel'  => $ap_test_titel,
+            'test_text'   => $ap_test_text), $ap_formtoken)) {
+        header('Location: index.php?form=' . rawurlencode(substr($tab, 4)), true, 303);
+        exit;
     }
 }
 
@@ -487,6 +547,9 @@ if ($ap_frame) {
 
 <?php foreach ($ap_fehler as $f) { ?>
 <div class="sm-warnung"><b><?php echo ap_e(ap_t('TEXT.HINWEIS')); ?></b> <?php echo ap_e($f); ?></div>
+<?php } ?>
+<?php foreach ($ap_fehler_html as $f) { ?>
+<div class="sm-warnung"><b><?php echo ap_e(ap_t('TEXT.HINWEIS')); ?></b> <?php echo $f; ?></div>
 <?php } ?>
 <?php foreach ($ap_hinweise as $h) { ?>
 <div class="sm-hinweis"><?php echo ap_e($h); ?></div>
@@ -681,8 +744,8 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
 </div>
 
 <div class="sm-legende">
-<span><i class="sm-punkt sm-b-aktion"></i> <?php echo ap_e(ap_t('LEGENDE.AKTION')); ?></span>
 <span><i class="sm-punkt sm-b-lesen"></i> <?php echo ap_e(ap_t('LEGENDE.LESEN')); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo ap_e(ap_t('LEGENDE.AKTION')); ?></span>
 </div>
 <div class="sm-knopfreihe">
 <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="save" value="1"><?php echo ap_e(ap_t('ALLGEMEIN.SPEICHERN')); ?></button>
@@ -703,10 +766,12 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
        einen Download, der das Speichern verschluckt. -->
   <form action="index.php" method="post">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <input data-role="none" type="hidden" name="ap_form" value="<?php echo ap_e($ap_formtoken); ?>">
     <button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="ap_sichern" value="1"><?= ap_t('EINST.K_SICHERN') ?></button>
   </form>
   <form action="index.php" method="post" enctype="multipart/form-data">
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
+    <input data-role="none" type="hidden" name="ap_form" value="<?php echo ap_e($ap_formtoken); ?>">
     <input data-role="none" type="file" name="ap_sicherung" accept=".json">
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ap_zurueck" value="1"><?= ap_t('EINST.K_ZURUECK') ?></button>
   </form>
@@ -733,6 +798,9 @@ $ap_kachel(ap_t('MQTT.PRAEFIX'), ap_e($ap_praefix));
 <?php } ?>
 <?php if (ap_cfg($ap_cfg, 'mqtt', '1') !== '1') { ?>
 <div class="sm-warnung"><?php echo ap_t('MQTT.W_AUSGESCHALTET'); ?></div>
+<?php } ?>
+<?php if (!ap_praefix_gueltig($ap_praefix)) { ?>
+<div class="sm-warnung"><?php echo ap_e(sprintf(ap_t('MQTT.PRAEFIX_GESPEICHERT_UNGUELTIG'), $ap_praefix)); ?></div>
 <?php } ?>
 
 <h2><?php echo ap_e(ap_t('MQTT.ABO_UEBERSCHRIFT')); ?></h2>
@@ -849,17 +917,21 @@ $ap_kachel(ap_t('MQTT.PRAEFIX'), ap_e($ap_praefix));
 <tr><td>7</td><td><?php echo ap_e(ap_t('LOXONE.B_VE')); ?></td><td class="sm-mono"><?php echo ap_e($ap_praefix); ?>_service_online</td><td>digital</td><td>&mdash;</td></tr>
 <tr><td>8</td><td><?php echo ap_e(ap_t('LOXONE.B_EINVERZ')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_ENTPRELLT')); ?></td><td>10&nbsp;s</td><td><?php echo ap_e(ap_t('LOXONE.E_EINGANG')); ?> #1</td></tr>
 <tr><td>9</td><td><?php echo ap_e(ap_t('LOXONE.B_NICHT')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_KEINE_DATEN')); ?></td><td>&mdash;</td><td><?php echo ap_e(ap_t('LOXONE.E_EINGANG')); ?> #3</td></tr>
-<tr><td>10</td><td><?php echo ap_e(ap_t('LOXONE.B_ODER')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_SAMMEL')); ?></td><td>&mdash;</td><td>#8, #4, #9</td></tr>
-<tr><td>11</td><td><?php echo ap_e(ap_t('LOXONE.B_BENACHR')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_MELDUNG')); ?></td><td><?php echo ap_e(ap_t('LOXONE.P_MELDETEXT')); ?></td><td><?php echo ap_e(ap_t('LOXONE.E_EINGANG')); ?> #10</td></tr>
-<tr><td>12</td><td><?php echo ap_e(ap_t('LOXONE.B_SCHWELL')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_LASTABWURF')); ?></td><td><?php echo ap_e(ap_t('LOXONE.P_SCHWELL')); ?></td><td><?php echo ap_e(ap_t('LOXONE.E_EINGANG')); ?> #2</td></tr>
-<tr><td>13</td><td><?php echo ap_e(ap_t('LOXONE.B_MERKER')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_STROMSPAREN')); ?></td><td><?php echo ap_e(ap_t('LOXONE.P_VISU')); ?></td><td><?php echo ap_e(ap_t('LOXONE.E_EINGANG')); ?> #12</td></tr>
-<tr><td>14</td><td><?php echo ap_e(ap_t('LOXONE.B_STATUS')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_STATUS')); ?></td><td><?php echo ap_e(ap_t('LOXONE.P_STATUS')); ?></td><td>v1 = #2, v2 = #5</td></tr>
+<?php /* U7 (1.2.14): bis 1.2.13 stand hier ein ODER mit drei Eingaengen
+   (#8, #4, #9); Regeln/04 Regel A4 verlangt die Kaskade. Die Folgenummern
+   sind nachgezogen. */ ?>
+<tr><td>10</td><td><?php echo ap_e(ap_t('LOXONE.B_ODER')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_SAMMEL_TEIL')); ?></td><td>&mdash;</td><td>#8, #4</td></tr>
+<tr><td>11</td><td><?php echo ap_e(ap_t('LOXONE.B_ODER')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_SAMMEL')); ?></td><td>&mdash;</td><td>#10, #9</td></tr>
+<tr><td>12</td><td><?php echo ap_e(ap_t('LOXONE.B_BENACHR')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_MELDUNG')); ?></td><td><?php echo ap_e(ap_t('LOXONE.P_MELDETEXT')); ?></td><td><?php echo ap_e(ap_t('LOXONE.E_EINGANG')); ?> #11</td></tr>
+<tr><td>13</td><td><?php echo ap_e(ap_t('LOXONE.B_SCHWELL')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_LASTABWURF')); ?></td><td><?php echo ap_e(ap_t('LOXONE.P_SCHWELL')); ?></td><td><?php echo ap_e(ap_t('LOXONE.E_EINGANG')); ?> #2</td></tr>
+<tr><td>14</td><td><?php echo ap_e(ap_t('LOXONE.B_MERKER')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_STROMSPAREN')); ?></td><td><?php echo ap_e(ap_t('LOXONE.P_VISU')); ?></td><td><?php echo ap_e(ap_t('LOXONE.E_EINGANG')); ?> #13</td></tr>
+<tr><td>15</td><td><?php echo ap_e(ap_t('LOXONE.B_STATUS')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_STATUS')); ?></td><td><?php echo ap_e(ap_t('LOXONE.P_STATUS')); ?></td><td>v1 = #2, v2 = #5</td></tr>
 </table>
 </div>
 <div class="sm-hinweis">
-<b>Zu #10:</b> <?php echo ap_t('LOXONE.ZU_10'); ?><br>
+<b>Zu #10 bis #12:</b> <?php echo ap_t('LOXONE.ZU_10'); ?><br>
 <b>Zu #8:</b> <?php echo ap_t('LOXONE.ZU_8'); ?><br>
-<b>Zu #12:</b> <?php echo ap_t('LOXONE.ZU_12'); ?><br>
+<b>Zu #13:</b> <?php echo ap_t('LOXONE.ZU_12'); ?><br>
 <b>Zu #6:</b> <?php echo ap_t('LOXONE.ZU_6'); ?>
 </div>
 
@@ -876,6 +948,14 @@ $ap_kachel(ap_t('MQTT.PRAEFIX'), ap_e($ap_praefix));
 
 <!-- ================= Reiter: Test ================= -->
 <div class="sm-seite<?php echo ap_aktiv('tab-test'); ?>" id="tab-test">
+<?php /* U8 (1.2.14): die Legende steht oben im Reiter, vor der ersten
+   Knopfreihe (Regeln/04 "Eine gesammelte Legende oben im Reiter"); bis
+   1.2.13 stand der gruene Knopf der Selbstpruefung darueber. */ ?>
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-lesen"></i> <?php echo ap_e(ap_t('LEGENDE.LESEN')); ?></span>
+<span><i class="sm-punkt sm-b-technik"></i> <?php echo ap_e(ap_t('LEGENDE.TECHNIK')); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo ap_e(ap_t('LEGENDE.AKTION')); ?></span>
+</div>
 <?php
 /* Die Selbstpruefung laeuft NUR, wenn dieser Reiter wirklich der offene ist.
  *
@@ -901,11 +981,6 @@ if ($tab === 'tab-test') {
 <?php } ?>
 
 <h2><?php echo ap_e(ap_t('TEST.KNOEPFE')); ?></h2>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-lesen"></i> <?php echo ap_e(ap_t('LEGENDE.LESEN')); ?></span>
-<span><i class="sm-punkt sm-b-technik"></i> <?php echo ap_e(ap_t('LEGENDE.TECHNIK')); ?></span>
-<span><i class="sm-punkt sm-b-aktion"></i> <?php echo ap_e(ap_t('LEGENDE.AKTION')); ?></span>
-</div>
 
 <!-- Die Knoepfe stehen AUSGESCHRIEBEN, nicht aus einer Schleife.
      hausstandard_pruefen.py vergleicht je Reiter die Farben der Legende mit
@@ -922,6 +997,7 @@ if ($tab === 'tab-test') {
 <form method="post" action="index.php"><?php echo $ap_ftok; ?><button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="werte"><?php echo ap_e(ap_t('TEST.K_WERTE')); ?></button></form>
 <form method="post" action="index.php"><?php echo $ap_ftok; ?><button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="ereignisse"><?php echo ap_e(ap_t('TEST.K_EREIGNISSE')); ?></button></form>
 <form method="post" action="index.php"><?php echo $ap_ftok; ?><button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="mqttinfo"><?php echo ap_e(ap_t('TEST.K_MQTT')); ?></button></form>
+<form method="post" action="index.php"><?php echo $ap_ftok; ?><button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="abfragen"><?php echo ap_e(ap_t('TEST.K_ABFRAGEN')); ?></button></form>
 </div>
 
 <h3><?php echo ap_e(ap_t('TEST.G_TECHNIK')); ?></h3>
@@ -935,7 +1011,6 @@ if ($tab === 'tab-test') {
 <h3><?php echo ap_e(ap_t('TEST.G_AKTION')); ?></h3>
 <div class="sm-hilfe"><?php echo ap_t('TEST.G_AKTION_HILFE'); ?></div>
 <div class="sm-knopfreihe">
-<form method="post" action="index.php"><?php echo $ap_ftok; ?><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="abfragen"><?php echo ap_e(ap_t('TEST.K_ABFRAGEN')); ?></button></form>
 <form method="post" action="index.php"><?php echo $ap_ftok; ?><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="melden"><?php echo ap_e(ap_t('TEST.K_MELDEN')); ?></button></form>
 <form method="post" action="index.php"><?php echo $ap_ftok; ?><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="restart"><?php echo ap_e(ap_t('TEST.K_RESTART')); ?></button></form>
 <form method="post" action="index.php"><?php echo $ap_ftok; ?><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="stop"><?php echo ap_e(ap_t('TEST.K_STOP')); ?></button></form>

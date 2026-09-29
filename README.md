@@ -4,6 +4,56 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.14
+
+Die Durchsicht vom 29.09.2026 hatte vier Prüfer (Code, Oberfläche, Installer, MQTT). Jeder Punkt ist gemessen. Zu
+jedem gibt es eine Gegenprobe, die an 1.2.13 rot und an 1.2.14 grün ist. Gemessen wurde in WSL mit einer Attrappe für
+`apcaccess` und einem Prüfbroker; der Stand im Broker zusätzlich am LoxBerry.
+
+**Einstellungen sichern und zurückspielen funktioniert jetzt.** Beide Knöpfe hatten nie eine Wirkung: Den Formularen
+fehlte das Formularmerkmal, sodass jeder Klick abgewiesen wurde. „Sichern“ hätte zudem eine Funktion aufgerufen, die
+es in der Oberfläche nicht gibt. Neu gilt:
+- Die Sicherung trägt alle Einstellungen und einen lesbaren Kopf, aber kein Formularmerkmal.
+- Beim Zurückspielen wird jeder Wert geprüft wie beim Speichern; bisher wurde jeder übernommen, auch Listen als
+  `Array`.
+- Nach dem Zurückspielen erscheint eine Meldung, und ein laufender Dienst wird nachgezogen.
+
+**Der Stand im Broker stimmt.**
+- Ein zurückbehaltener Zustand ohne Aussage geht als `-` hinaus. Bisher ging eine leere Nachricht ohne Retain hinaus,
+  und im Broker blieb der alte Wert stehen.
+- Scheitert die Abfrage von `apcupsd`, gehen die Zustände (`status`, `data_valid`, `on_line`, …) als `-` hinaus. Die
+  Angaben zum Gerät (Modell, Seriennummer, Nennwerte) bleiben stehen.
+- Bei unterbrochener Verbindung zur USV (COMMLOST) gehen keine Messwerte mehr als frisch hinaus.
+- Nach einem Wechsel des Themenpräfixes und beim Ausschalten von MQTT werden die Themen unter dem bisherigen Präfix
+  geleert und beim Broker nachgelesen.
+- Ein Präfix mit Schrägstrich am Rand oder mit `#`/`+` wird beanstandet, statt still verändert zu werden.
+- `service/online` geht auch im Vollversand hinaus. Leere Messwerte gehen nicht mehr hinaus.
+- Eine abgewiesene Anmeldung am Broker wird auch unter paho 2 im Klartext gemeldet.
+- `mqtt_subscriptions.cfg` kommt mit, und das MQTT-Gateway liest sie. Das Abo muss niemand mehr von Hand eintragen.
+- Scheitert eine Veröffentlichung, bleibt keine offene Broker-Verbindung zurück; bisher waren es bis zu fünf.
+
+**Ausfall wird erkannt.** Der Endpunkt meldet im Block `CALC` jetzt `OK` und `ALTER`. `OK=0` gilt, sobald die
+Zustandsdatei älter ist als der dreifache Abfragetakt.
+
+**Oberfläche.**
+- Nach jedem Absenden wird umgeleitet. F5 schreibt keinen Merker erneut und startet den Dienst nicht erneut.
+- Eingaben werden beanstandet, statt still zurechtgebogen zu werden. Ein Tippfehler im Host löscht den gespeicherten
+  Host nicht mehr.
+- Der Reiter Test hat eine neue Zeile „Tragen alle Formulare das Merkmal?“. Die Zeilen zum Wächter und zur Vorlage
+  unterscheiden jetzt die Fälle ehrlich.
+- Die englische Seite zeigt keine deutschen Sätze mehr.
+- Die Baustein-Liste für Loxone arbeitet mit einer Kaskade statt mit einem ODER aus drei Eingängen.
+- PHP 8.5 meldet keine Verfallswarnung mehr.
+
+**Installation.**
+- Eine Neuinstallation spielt keine Einstellungen einer früheren Installation mehr ein. Sie werden als `.alt`
+  beiseitegelegt und einmal genannt.
+- Eine Upgrade-Sicherung aus einem früheren Vorgang wird nicht mehr eingespielt, außer das Update war abgebrochen und
+  wird wiederholt.
+- Die Zweitschrift heilt eine kaputte Konfiguration bei einem Update weiterhin.
+- Der Sicherungsordner steht wirklich auf 0700.
+- Die Hilfe beschreibt `ISCONFIGURED` so, wie es am Gerät gemessen ist.
+
 ## Neu in 1.2.13
 
 **Zwei Themen gehen nicht mehr zurückbehalten hinaus.** `<Präfix>/valid`
@@ -678,9 +728,11 @@ Sprachdateien ist entfallen. Der Reiter *Test* prüft apcupsd, zeigt die Rohdate
 und kann eine Testbenachrichtigung ablegen.
 
 **Installation** — `dpkg/apt` nur noch mit `apcupsd` und `python3-paho-mqtt`.
-Die einzige Systemdatei, die noch angefasst wird, ist `/etc/default/apcupsd`:
-dort steht `ISCONFIGURED=no`, solange das nicht geändert wird startet apcupsd
-nicht. Der Dienst läuft als `loxberry`, nicht als `root`.
+Eine Systemdatei ändert das Plugin nicht: der Versuch, in `/etc/default/apcupsd`
+`ISCONFIGURED=yes` zu setzen, scheitert als `loxberry`, und das Protokoll sagt
+es. Das bleibt ohne Folgen – apcupsd startet über systemd, und dessen Unit liest
+die Datei nicht (am Gerät gemessen: `ISCONFIGURED=no`, und apcupsd läuft). Der
+Dienst läuft als `loxberry`, nicht als `root`.
 
 ## MQTT-Themen
 
@@ -792,8 +844,10 @@ wieder da" wurde dadurch die nichtssagende Meldung „Zustand geändert".
 
 Über *Plugin-Verwaltung → Plugin installieren* das ZIP oder die Release-Adresse
 angeben. Danach im Reiter *Test* mit *Jetzt abfragen* prüfen, ob die USV
-antwortet. Kommt dort nichts, hilft *apcupsd prüfen* weiter — meistens steht
-`ISCONFIGURED` noch auf `no` oder die USV ist nicht per USB erkannt.
+antwortet. Kommt dort nichts, hilft *apcupsd prüfen* weiter — meistens ist die
+USV nicht per USB erkannt, oder in `/etc/apcupsd/apcupsd.conf` steht bei
+`UPSTYPE usb` noch ein `DEVICE` (Debian liefert `/dev/ttyS0` vor; für USB bleibt
+es leer). `ISCONFIGURED` spielt auf dem LoxBerry keine Rolle.
 
 ## Aufgeräumt
 

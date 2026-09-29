@@ -64,13 +64,27 @@ PCONFIG=$LBPCONFIG/$PDIR
 # Datenordner, weil purge_installation den Ordner selbst loescht.
 APC_PDIR="${3:-apc_ups_ng}"
 MARKE="$APC_BASE/data/plugins/$APC_PDIR.upgrade_laeuft"
+# I2 (Entscheidung 1): VOR dem Anlegen festhalten, ob schon eine Marke lag.
+# Dann hat ein frueherer Versuch DIESES Updates nach preupgrade.sh
+# abgebrochen, und eine liegende Upgrade-Sicherung ist dessen Abschrift.
+APC_MARKE_VORHER=0
+[ -f "$MARKE" ] && APC_MARKE_VORHER=1
 mkdir -p "$APC_BASE/data/plugins" 2>/dev/null
-date +%s > "$MARKE" 2>/dev/null
+# In geschweiften Klammern: sonst schreibt die Schale ihre eigene Meldung
+# ("cannot create ...") am 2>/dev/null vorbei ins Protokoll.
+{ date +%s > "$MARKE"; } 2>/dev/null
 if grep -qx '[0-9][0-9]*' "$MARKE" 2>/dev/null; then
     echo "<OK> Dienststart bis zum Ende der Installation gesperrt."
 else
-    echo "<WARNING> Die Marke $MARKE liess sich nicht anlegen - der Waechter"
-    echo "<WARNING> kann den Dienst waehrend der Installation starten."
+    # Seit 1.2.14 entscheidet postinstall.sh allein an dieser Marke, ob es
+    # eine Aktualisierung ist (Entscheidung 1). Ohne sie hielte es das
+    # Update fuer eine Neuinstallation und legte die Einstellungen beiseite -
+    # deshalb hier Abbruch, vor purge_installation (Bauform KODI-NG 1.2.12).
+    echo "<FAIL> Die Marke $MARKE liess sich nicht anlegen."
+    echo "<FAIL> Ohne sie hielte postinstall.sh dieses Update fuer eine Neuinstallation"
+    echo "<FAIL> und legte die Einstellungen beiseite. Die Aktualisierung wird"
+    echo "<FAIL> abgebrochen; die bisherige Fassung bleibt unveraendert installiert."
+    exit 2
 fi
 
 # Ist PID ein Dienst dieses Plugins? Argumentweise (Regeln/03): argv[0] ein
@@ -164,16 +178,44 @@ apc_cfg_hat_inhalt() {
 NEU="$SICHER.neu"
 echo "<INFO> Backing up existing config files"
 # Ein Rest aus einem Lauf, der zwischen den beiden Umbenennungen unten
-# endete: dann ist $SICHER.alt die einzige Sicherung.
-if [ -d "$SICHER.alt" ] && [ ! -e "$SICHER" ]; then
-    mv "$SICHER.alt" "$SICHER" 2>/dev/null
+# endete: dann ist $SICHER.tausch die einzige Sicherung. (Bis 1.2.13 hiess
+# der Zwischenstand .alt; .alt heisst seit 1.2.14 "beiseitegelegt" und wird
+# nie eingespielt - Entscheidung 1.)
+if [ -d "$SICHER.tausch" ] && [ ! -e "$SICHER" ]; then
+    mv "$SICHER.tausch" "$SICHER" 2>/dev/null
+fi
+# I2 (Entscheidung 1): eine Upgrade-Sicherung, die hier schon liegt, bleibt
+# NUR, wenn auch die Marke schon vor diesem Lauf lag - abgebrochener Versuch
+# dieses Updates (Fall F2 aus 1.2.12, Bauform KODI-NG 1.2.12). Sonst stammt
+# sie aus einem frueheren Vorgang: bis 1.2.13 spielte postupgrade.sh sie ein,
+# sobald die jetzige Konfiguration keinen vollstaendigen Stand trug (in WSL
+# gemessen, Faelle F3b und F5b: Praefix einer Juni-Sicherung). Sie kommt nach
+# $SICHER.alt und wird gemeldet.
+if [ "$APC_MARKE_VORHER" != "1" ] && { [ -e "$SICHER" ] || [ -L "$SICHER" ]; }; then
+    rm -rf "$SICHER.alt" 2>/dev/null
+    if mv -f "$SICHER" "$SICHER.alt" 2>/dev/null; then
+        echo "<WARNING> Unter $SICHER lag eine Sicherung aus einem frueheren Vorgang (keine Marke"
+        echo "<WARNING> eines abgebrochenen Updates). Sie wird nicht eingespielt und liegt jetzt unter $SICHER.alt."
+    else
+        rm -rf "$SICHER" 2>/dev/null
+        if [ -e "$SICHER" ] || [ -L "$SICHER" ]; then
+            echo "<WARNING> Unter $SICHER liegt eine Sicherung aus einem frueheren Vorgang, die sich weder"
+            echo "<WARNING> beiseitelegen noch entfernen liess - postupgrade.sh spielte sie ein. Bitte von Hand entfernen."
+        else
+            echo "<WARNING> Unter $SICHER lag eine Sicherung aus einem frueheren Vorgang; sie liess sich"
+            echo "<WARNING> nicht beiseitelegen und wurde entfernt, damit dieses Update keinen alten Stand einspielt."
+        fi
+    fi
 fi
 rm -rf "$NEU" 2>/dev/null
 SICHER_OK=0
 if [ -d "$PCONFIG" ]; then
     mkdir -p "$NEU" 2>/dev/null
-    chmod 0700 "$NEU" 2>/dev/null
     if cp -a "$PCONFIG/." "$NEU/" 2>/dev/null; then CP_RC=0; else CP_RC=$?; fi
+    # I3: ERST nach dem Kopieren. "cp -a <Quelle>/." uebertraegt die Rechte des
+    # Quellordners auf das Ziel; bis 1.2.13 stand chmod davor, der Ordner war
+    # danach 755, und das Protokoll meldete 0700 (in WSL gemessen, Befund 3).
+    chmod 0700 "$NEU" 2>/dev/null
     # Die Wirkung pruefen, nicht den Rueckgabewert allein (CLAUDE.md, 2).
     ABWEICHEND=$( { cd "$PCONFIG" && find . -type f | while IFS= read -r f; do
                       cmp -s "$f" "$NEU/$f" || printf '%s ' "${f#./}"
@@ -197,16 +239,22 @@ if [ "$SICHER_OK" = "1" ] && [ -d "$SICHER" ] \
     echo "<WARNING> nicht ersetzt, postupgrade.sh spielt sie zurueck."
 fi
 if [ "$SICHER_OK" = "1" ]; then
-    rm -rf "$SICHER.alt" 2>/dev/null
-    if [ -e "$SICHER" ] && ! mv "$SICHER" "$SICHER.alt" 2>/dev/null; then
+    rm -rf "$SICHER.tausch" 2>/dev/null
+    if [ -e "$SICHER" ] && ! mv "$SICHER" "$SICHER.tausch" 2>/dev/null; then
         rm -rf "$NEU" 2>/dev/null
         echo "<WARNING> Die bisherige Sicherung liess sich nicht beiseite legen und"
         echo "<WARNING> bleibt unveraendert: $SICHER"
     elif mv -T "$NEU" "$SICHER" 2>/dev/null; then
-        rm -rf "$SICHER.alt" 2>/dev/null
-        echo "<OK> Konfiguration gesichert nach $SICHER (Rechte 0700)."
+        rm -rf "$SICHER.tausch" 2>/dev/null
+        # I3: gemeldet wird, was nachgelesen ist - nicht eine feste Zahl.
+        RECHTE=$(stat -c %a "$SICHER" 2>/dev/null)
+        if [ "$RECHTE" = "700" ]; then
+            echo "<OK> Konfiguration gesichert nach $SICHER (Rechte $RECHTE)."
+        else
+            echo "<WARNING> Konfiguration gesichert nach $SICHER, aber mit den Rechten ${RECHTE:-(nicht lesbar)} statt 700."
+        fi
     else
-        if [ -d "$SICHER.alt" ]; then mv "$SICHER.alt" "$SICHER" 2>/dev/null; fi
+        if [ -d "$SICHER.tausch" ]; then mv "$SICHER.tausch" "$SICHER" 2>/dev/null; fi
         rm -rf "$NEU" 2>/dev/null
         echo "<WARNING> Die neue Sicherung liess sich nicht an ihren Platz bringen."
         echo "<WARNING> Platz und Rechte in $LBPDATA pruefen."
@@ -308,6 +356,14 @@ if apc_cfg_hat_inhalt "$NETZ_CFG/apc_ups_ng.cfg"; then
         fi
     fi
 elif [ -f "$NETZ_ZWEIT" ]; then
+    # Die Zweitschrift schreibt JEDES Speichern der Oberflaeche neu - sie ist die
+    # laufende Rueckfallkopie, kein Rest eines frueheren Vorgangs. preupgrade.sh
+    # laeuft nur bei einem Update, die Marke liegt also vor: Entscheidung 1
+    # erlaubt das Zurueckspielen, und genau das heilt eine kaputte Konfiguration.
+    # (Nur die Upgrade-Sicherung, die dieses Skript selbst anlegt, wird nach der
+    # Marke eines FRUEHEREN Laufs beurteilt - siehe oben. Ein Zwischenbau vom
+    # 29.09.2026 legte auch die Zweitschrift nach .alt; das nahm dem Update
+    # mit kaputter Konfiguration jeden Rueckweg.)
     echo "<WARNING> $NETZ_CFG/apc_ups_ng.cfg traegt keinen vollstaendigen Stand"
     echo "<WARNING> (Kopf [apc_ups_ng] und Formulartoken). Die vorhandene Zweitschrift"
     echo "<WARNING> bleibt deshalb unveraendert: $NETZ_ZWEIT"
