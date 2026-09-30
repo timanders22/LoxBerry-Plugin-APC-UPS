@@ -99,6 +99,29 @@ function ap_aktiv($id)
     return $tab === $id ? ' sm-active' : '';
 }
 
+/** X-2: der Wert eines Feldes - nach einer Beanstandung DIESES Formulars der
+ *  eingetippte, sonst der gespeicherte. */
+function ap_fwert($formular, $k, $gespeichert)
+{
+    global $ap_eingaben;
+    if (is_array($ap_eingaben) && $ap_eingaben['formular'] === $formular
+        && array_key_exists($k, $ap_eingaben['werte'])) {
+        return $ap_eingaben['werte'][$k];
+    }
+    return (string) $gespeichert;
+}
+
+/** X-2: Merkmal eines beanstandeten Feldes (roter Rahmen, aria-invalid). */
+function ap_fmark($formular, $k)
+{
+    global $ap_eingaben;
+    if (is_array($ap_eingaben) && $ap_eingaben['formular'] === $formular
+        && in_array($k, $ap_eingaben['falsch'], true)) {
+        return ' class="sm-falsch" aria-invalid="true"';
+    }
+    return '';
+}
+
 $ap_saved     = false;
 $ap_fehler    = array();   // harte Beanstandungen
 $ap_hinweise  = array();   // Meldungen, die das Speichern nicht verhindern
@@ -106,6 +129,8 @@ $ap_hinweise  = array();   // Meldungen, die das Speichern nicht verhindern
 // lief "Die Datei wurde <b>nicht</b> uebernommen" durch ap_e() und stand mit
 // sichtbaren Tags auf der Seite.
 $ap_fehler_html = array();
+// X-2: die Eingaben eines beanstandeten Formulars (null = keine).
+$ap_eingaben = null;
 
 list($ap_cfg, $ap_altformat) = ap_config_read();
 
@@ -199,6 +224,12 @@ if (!$ap_war_post) {
         $ap_hinweise    = array_merge($ap_hinweise, $ap_einmal['hinweise']);
         $ap_test_titel  = $ap_einmal['test_titel'];
         $ap_test_text   = $ap_einmal['test_text'];
+        // X-2: nur nach einer Beanstandung - nach erfolgreichem Speichern
+        // zeigt der GET die gespeicherten Werte.
+        $ap_eingaben    = $ap_einmal['eingaben'];
+        if ($ap_eingaben !== null) {
+            $ap_hinweise[] = ap_t('EINST.EINGABEN_ZURUECK');
+        }
     }
 }
 if ($ap_ist_post && isset($_POST['test'])) {
@@ -226,12 +257,14 @@ if ($ap_ist_post && isset($_POST['save'])) {
         $ap_v = isset($_POST[$ap_k]) ? $_POST[$ap_k] : '';
         $eingabe[$ap_k] = is_string($ap_v) ? trim($ap_v) : $ap_v;
     }
-    list($ap_gut, $ap_mangel) = ap_werte_pruefen($eingabe);
+    list($ap_gut, $ap_mangel, $ap_falsch) = ap_werte_pruefen($eingabe);
     if ($ap_mangel) {
         $ap_fehler[] = ap_t('EINST.NICHT_GESPEICHERT');
         foreach ($ap_mangel as $ap_m) {
             $ap_fehler[] = $ap_m;
         }
+        // X-2: die eingetippten Werte reisen mit der Einmalmeldung zurueck.
+        $ap_eingaben = ap_eingaben_merken('settings', $eingabe, $ap_falsch);
     } elseif (ap_config_write(array_merge($ap_cfg, $ap_gut))) {
         $ap_saved = true;
         // 'uebernehmen': neu starten, damit die Einstellungen gelten - einen
@@ -289,12 +322,17 @@ if ($ap_ist_post && isset($_POST['save_mqtt'])) {
     }
     $eingabe['rohfelder'] = implode(',', $rf_gut);
 
-    list($ap_gut, $ap_mangel) = ap_werte_pruefen($eingabe);
+    list($ap_gut, $ap_mangel, $ap_falsch) = ap_werte_pruefen($eingabe);
     if ($ap_mangel) {
         $ap_fehler[] = ap_t('EINST.NICHT_GESPEICHERT');
         foreach ($ap_mangel as $ap_m) {
             $ap_fehler[] = $ap_m;
         }
+        // X-2: zurueck geht, was getippt war - die Rohfelder so, wie sie im
+        // Feld standen, nicht in der gesaeuberten Form.
+        $ap_zurueck = $eingabe;
+        $ap_zurueck['rohfelder'] = $rf_roh;
+        $ap_eingaben = ap_eingaben_merken('mqtt', $ap_zurueck, $ap_falsch);
     } else {
         $neu = array_merge($ap_cfg, $ap_gut);
         if (ap_config_write($neu)) {
@@ -443,7 +481,8 @@ if ($ap_war_post) {
             'fehler_html' => $ap_fehler_html,
             'hinweise'    => $ap_hinweise,
             'test_titel'  => $ap_test_titel,
-            'test_text'   => $ap_test_text), $ap_formtoken)) {
+            'test_text'   => $ap_test_text,
+            'eingaben'    => $ap_eingaben), $ap_formtoken)) {
         header('Location: index.php?form=' . rawurlencode(substr($tab, 4)), true, 303);
         exit;
     }
@@ -538,6 +577,8 @@ if ($ap_frame) {
     white-space: pre-wrap; }
 .sm-zeile { display: flex; gap: 12px; flex-wrap: wrap; }
 .sm-zeile > div { flex: 1; min-width: 190px; }
+/* Ergaenzung (X-2): ein beanstandetes Feld nach der Umleitung. */
+.sm-wrap input.sm-falsch { border: 2px solid #b00000 !important; background: #fff4f4; }
 </style>
 <div class="sm-wrap">
 
@@ -684,7 +725,7 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
 <h2><?php echo ap_e(ap_t('EINST.BETRIEB')); ?></h2>
 <div class="sm-feld">
 <label><input data-role="none" type="checkbox" name="enabled" value="1"<?php
-    echo ap_cfg($ap_cfg, 'enabled', '1') === '1' ? ' checked' : ''; ?>>
+    echo ap_fwert('settings', 'enabled', ap_cfg($ap_cfg, 'enabled', '1')) === '1' ? ' checked' : ''; ?>>
 <?php echo ap_e(ap_t('EINST.PLUGIN_EINGESCHALTET')); ?></label>
 <div class="sm-hilfe"><?php echo ap_t('EINST.PLUGIN_EINGESCHALTET_HILFE'); ?></div>
 </div>
@@ -692,16 +733,16 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
 <div class="sm-zeile">
 <div class="sm-feld">
 <label><?php echo ap_e(ap_t('EINST.INTERVALL')); ?></label>
-<input data-role="none" type="number" name="intervall" min="5" max="3600" value="<?php echo ap_e(ap_cfg($ap_cfg, 'intervall', '30')); ?>">
+<input data-role="none"<?php echo ap_fmark('settings', 'intervall'); ?> type="number" name="intervall" min="5" max="3600" value="<?php echo ap_e(ap_fwert('settings', 'intervall', ap_cfg($ap_cfg, 'intervall', '30'))); ?>">
 </div>
 <div class="sm-feld">
 <label><?php echo ap_e(ap_t('EINST.AKTUALISIERUNG')); ?></label>
-<input data-role="none" type="number" name="aktualisierung" min="5" max="86400" value="<?php echo ap_e(ap_cfg($ap_cfg, 'aktualisierung', '300')); ?>">
+<input data-role="none"<?php echo ap_fmark('settings', 'aktualisierung'); ?> type="number" name="aktualisierung" min="5" max="86400" value="<?php echo ap_e(ap_fwert('settings', 'aktualisierung', ap_cfg($ap_cfg, 'aktualisierung', '300'))); ?>">
 <div class="sm-hilfe"><?php echo ap_t('EINST.AKTUALISIERUNG_HILFE'); ?></div>
 </div>
 <div class="sm-feld">
 <label><?php echo ap_e(ap_t('EINST.HOST')); ?></label>
-<input data-role="none" type="text" name="host" value="<?php echo ap_e(ap_roh($ap_cfg, 'host')); ?>">
+<input data-role="none"<?php echo ap_fmark('settings', 'host'); ?> type="text" name="host" value="<?php echo ap_e(ap_fwert('settings', 'host', ap_roh($ap_cfg, 'host'))); ?>">
 <div class="sm-hilfe"><?php echo ap_t('EINST.HOST_HILFE'); ?></div>
 </div>
 </div>
@@ -711,15 +752,15 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
 <div class="sm-zeile">
 <div class="sm-feld">
 <label><?php echo ap_e(ap_t('EINST.VORWARN_MIN')); ?></label>
-<input data-role="none" type="number" name="vorwarn_min" min="0" max="600" value="<?php echo ap_e(ap_cfg($ap_cfg, 'vorwarn_min', '5')); ?>">
+<input data-role="none"<?php echo ap_fmark('settings', 'vorwarn_min'); ?> type="number" name="vorwarn_min" min="0" max="600" value="<?php echo ap_e(ap_fwert('settings', 'vorwarn_min', ap_cfg($ap_cfg, 'vorwarn_min', '5'))); ?>">
 </div>
 <div class="sm-feld">
 <label><?php echo ap_e(ap_t('EINST.VORWARN_PROZENT')); ?></label>
-<input data-role="none" type="number" name="vorwarn_prozent" min="0" max="100" value="<?php echo ap_e(ap_cfg($ap_cfg, 'vorwarn_prozent', '10')); ?>">
+<input data-role="none"<?php echo ap_fmark('settings', 'vorwarn_prozent'); ?> type="number" name="vorwarn_prozent" min="0" max="100" value="<?php echo ap_e(ap_fwert('settings', 'vorwarn_prozent', ap_cfg($ap_cfg, 'vorwarn_prozent', '10'))); ?>">
 </div>
 <div class="sm-feld">
 <label><?php echo ap_e(ap_t('EINST.LOG_KB')); ?></label>
-<input data-role="none" type="number" name="log_kb" min="32" max="20480" value="<?php echo ap_e(ap_cfg($ap_cfg, 'log_kb', '512')); ?>">
+<input data-role="none"<?php echo ap_fmark('settings', 'log_kb'); ?> type="number" name="log_kb" min="32" max="20480" value="<?php echo ap_e(ap_fwert('settings', 'log_kb', ap_cfg($ap_cfg, 'log_kb', '512'))); ?>">
 <div class="sm-hilfe"><?php echo ap_t('EINST.LOG_KB_HILFE'); ?></div>
 </div>
 </div>
@@ -727,19 +768,19 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
 <h2><?php echo ap_e(ap_t('EINST.MELDEWEGE')); ?></h2>
 <div class="sm-feld">
 <label><input data-role="none" type="checkbox" name="benachrichtigung" value="1"<?php
-    echo ap_cfg($ap_cfg, 'benachrichtigung', '1') === '1' ? ' checked' : ''; ?>>
+    echo ap_fwert('settings', 'benachrichtigung', ap_cfg($ap_cfg, 'benachrichtigung', '1')) === '1' ? ' checked' : ''; ?>>
 <?php echo ap_e(ap_t('EINST.BENACHRICHTIGUNG')); ?></label>
 <div class="sm-hilfe"><?php echo ap_t('EINST.BENACHRICHTIGUNG_HILFE'); ?></div>
 </div>
 <div class="sm-feld">
 <label><input data-role="none" type="checkbox" name="email" value="1"<?php
-    echo ap_cfg($ap_cfg, 'email', '0') === '1' ? ' checked' : ''; ?>>
+    echo ap_fwert('settings', 'email', ap_cfg($ap_cfg, 'email', '0')) === '1' ? ' checked' : ''; ?>>
 <?php echo ap_e(ap_t('EINST.EMAIL')); ?></label>
 <div class="sm-hilfe"><?php echo ap_t('EINST.EMAIL_HILFE'); ?></div>
 </div>
 <div class="sm-feld">
 <label><?php echo ap_e(ap_t('EINST.EMAIL_AN')); ?></label>
-<input data-role="none" type="text" name="email_an" value="<?php echo ap_e(ap_cfg($ap_cfg, 'email_an', 'root')); ?>">
+<input data-role="none"<?php echo ap_fmark('settings', 'email_an'); ?> type="text" name="email_an" value="<?php echo ap_e(ap_fwert('settings', 'email_an', ap_cfg($ap_cfg, 'email_an', 'root'))); ?>">
 <div class="sm-hilfe"><?php echo ap_t('EINST.EMAIL_AN_HILFE'); ?></div>
 </div>
 
@@ -759,6 +800,16 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
 <h2><?= ap_t('EINST.H_SICHERUNG') ?></h2>
 <div class="sm-hinweis"><?= ap_t('EINST.SICH_ERKLAERUNG') ?></div>
 <div class="sm-warnung"><?= ap_t('EINST.SICH_WARNUNG') ?></div>
+<?php
+/* X-3 (30.09.2026): Bestuende die eigene Sicherung das Zurueckspielen nicht,
+ * steht es hier - geprueft mit ap_sicherung_lesen(), derselben Funktion wie
+ * beim Zurueckspielen. Genannt werden die Einstellungen, nicht ihre Werte. */
+$ap_sich_mangel = ap_sicherung_eigene_maengel($ap_cfg);
+if ($ap_sich_mangel) { ?>
+<div class="sm-warnung" id="ap-sicherung-warnung"><b><?php echo ap_e(ap_t('TEXT.HINWEIS')); ?></b> <?php
+    echo ap_e(sprintf(ap_t('EINST.SICH_EIGEN_WARNUNG'),
+                      implode(', ', array_map('ap_feld_name', $ap_sich_mangel)))); ?></div>
+<?php } ?>
 <div class="sm-knopfreihe">
   <!-- ZWEI GETRENNTE Formulare. Das Sichern schickt einen Download und ruft
        exit auf; das Zurueckspielen braucht enctype="multipart/form-data".
@@ -817,18 +868,18 @@ $ap_kachel(ap_t('MQTT.PRAEFIX'), ap_e($ap_praefix));
 <input data-role="none" type="hidden" name="ap_form" value="<?php echo ap_e($ap_formtoken); ?>">
 <div class="sm-feld">
 <label><input data-role="none" type="checkbox" name="mqtt" value="1"<?php
-    echo ap_cfg($ap_cfg, 'mqtt', '1') === '1' ? ' checked' : ''; ?>>
+    echo ap_fwert('mqtt', 'mqtt', ap_cfg($ap_cfg, 'mqtt', '1')) === '1' ? ' checked' : ''; ?>>
 <?php echo ap_e(ap_t('MQTT.EINSCHALTEN')); ?></label>
 <div class="sm-hilfe"><?php echo ap_t('MQTT.EINSCHALTEN_HILFE'); ?></div>
 </div>
 <div class="sm-feld">
 <label><?php echo ap_e(ap_t('MQTT.PRAEFIX')); ?></label>
-<input data-role="none" type="text" name="themenpraefix" value="<?php echo ap_e($ap_praefix); ?>">
+<input data-role="none"<?php echo ap_fmark('mqtt', 'themenpraefix'); ?> type="text" name="themenpraefix" value="<?php echo ap_e(ap_fwert('mqtt', 'themenpraefix', $ap_praefix)); ?>">
 <div class="sm-hilfe"><?php echo ap_t('MQTT.PRAEFIX_HILFE'); ?></div>
 </div>
 <div class="sm-feld">
 <label><?php echo ap_e(ap_t('MQTT.ROHFELDER')); ?></label>
-<input data-role="none" type="text" name="rohfelder" value="<?php echo ap_e(ap_roh($ap_cfg, 'rohfelder')); ?>" placeholder="LINEFREQ, HITRANS, LOTRANS">
+<input data-role="none"<?php echo ap_fmark('mqtt', 'rohfelder'); ?> type="text" name="rohfelder" value="<?php echo ap_e(ap_fwert('mqtt', 'rohfelder', ap_roh($ap_cfg, 'rohfelder'))); ?>" placeholder="LINEFREQ, HITRANS, LOTRANS">
 <div class="sm-hilfe"><?php echo ap_t('MQTT.ROHFELDER_HILFE'); ?></div>
 </div>
 <div class="sm-legende">

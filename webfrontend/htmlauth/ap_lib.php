@@ -1149,7 +1149,9 @@ function ap_abo_text()
  * Unbekannte Schluessel sind eine Beanstandung, kein stiller Verlust: sie
  * stammen aus einer anderen Fassung oder einem anderen Plugin.
  *
- * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte).
+ * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte,
+ * beanstandete Schluessel[]). Den vierten Wert braucht "Sichern" (X-3), um
+ * die betroffenen Einstellungen zu nennen, ohne ihre Werte zu wiederholen.
  */
 function ap_sicherung_lesen($roh, $bisher = null)
 {
@@ -1170,9 +1172,10 @@ function ap_sicherung_lesen($roh, $bisher = null)
      *   - die Beanstandungen sind Klartext. Maskiert wird EINMAL, bei der
      *     Ausgabe (bis 1.2.13 hier und dort, also doppelt). */
     $mangel = array();
+    $falsch = array();
     $daten = json_decode((string) $roh, true);
     if (!is_array($daten)) {
-        return array(null, array(ap_t('EINST.SICH_KEIN_JSON')), 0);
+        return array(null, array(ap_t('EINST.SICH_KEIN_JSON')), 0, array());
     }
     if (!is_array($bisher)) {
         list($bisher, $unbenutzt) = ap_config_read();
@@ -1189,6 +1192,7 @@ function ap_sicherung_lesen($roh, $bisher = null)
         }
         if (!in_array($k, $pflicht, true)) {
             $mangel[] = sprintf(ap_t('EINST.SICH_FREMD'), $k);
+            $falsch[] = $k;
             continue;
         }
         $werte[$k] = $w;
@@ -1205,16 +1209,17 @@ function ap_sicherung_lesen($roh, $bisher = null)
     if ($fehlend) {
         $mangel[] = sprintf(ap_t('EINST.SICH_FEHLEND'), count($fehlend), implode(', ', $fehlend));
     }
-    list($gut, $pruef) = ap_werte_pruefen($werte);
+    list($gut, $pruef, $pruef_falsch) = ap_werte_pruefen($werte);
     $mangel = array_merge($mangel, $pruef);
     if ($mangel) {
-        return array(null, $mangel, count($werte));
+        return array(null, $mangel, count($werte),
+                     array_values(array_unique(array_merge($falsch, $fehlend, $pruef_falsch))));
     }
     $neu = $bisher;
     foreach ($gut as $k => $v) {
         $neu[$k] = $v;
     }
-    return array($neu, array(), count($gut));
+    return array($neu, array(), count($gut), array());
 }
 
 /** Die Schluessel einer Sicherung: alle Einstellungen ausser dem Formularmerkmal. */
@@ -1262,10 +1267,50 @@ function ap_sicherung_json($cfg)
         '_stand'   => sprintf(ap_t('EINST.SICH_STAND'), $f !== '' ? $f : '?', date('Y-m-d H:i:s')),
         '_hinweis' => ap_t('EINST.SICH_KOPF_HINWEIS'),
     );
+    // X-3 (30.09.2026): Wuerde das eigene Zurueckspielen diese Datei
+    // abweisen, sagt es der Kopf - nur die Schluesselnamen, nie die Werte.
+    // Geliefert wird trotzdem: eine Sicherung, die man nicht bekommt, hilft
+    // beim Umzug noch weniger als eine, die man vorher berichtigen muss.
+    $maengel = ap_sicherung_eigene_maengel($cfg);
+    if ($maengel) {
+        $aus['_warnung'] = sprintf(ap_t('EINST.SICH_KOPF_WARNUNG'), implode(', ', $maengel));
+    }
+    foreach (ap_sicherung_werte($cfg) as $k => $v) {
+        $aus[$k] = $v;
+    }
+    return json_encode($aus, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+}
+
+/** Die Werte einer Sicherung ohne Kopf - genau das, was ap_sicherung_json() schreibt. */
+function ap_sicherung_werte($cfg)
+{
+    $aus = array();
     foreach (ap_sicherung_schluessel() as $k) {
         $aus[$k] = ap_roh($cfg, $k);
     }
-    return json_encode($aus, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    return $aus;
+}
+
+/**
+ * X-3 (30.09.2026, Bauform KODI-NG U3): Bestuende die eigene Sicherung das
+ * Zurueckspielen? Geprueft wird mit ap_sicherung_lesen() - DERSELBEN Funktion
+ * wie beim Zurueckspielen, nicht mit einer zweiten Regel, die auseinanderlaufen
+ * koennte. Rueckgabe: die beanstandeten Schluessel, leer = besteht.
+ * Anlass: eine von Hand geaenderte Konfiguration (etwa intervall=4) oder ein
+ * Altwert aus 1.2.13 (Praefix apcups/) wurde gesichert, und erst der Umzug
+ * zeigte, dass die Datei nicht zurueckgeht.
+ */
+function ap_sicherung_eigene_maengel($cfg)
+{
+    $js = json_encode(ap_sicherung_werte($cfg), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($js === false) {
+        return array('?');
+    }
+    $r = array_pad(ap_sicherung_lesen($js, $cfg), 4, array());
+    if ($r[0] !== null) {
+        return array();
+    }
+    return $r[3] ? array_values($r[3]) : array('?');
 }
 
 /** Grenzen der Zahlenfelder - EINE Stelle fuer Formular und Sicherung. */
@@ -1385,20 +1430,24 @@ function ap_wert_pruefen($k, $v)
     return array(false, '', sprintf(ap_t('EINST.SICH_FREMD'), $k));
 }
 
-/** Mehrere Werte pruefen. Rueckgabe: array(gute Werte, Beanstandungen). */
+/** Mehrere Werte pruefen. Rueckgabe: array(gute Werte, Beanstandungen,
+ *  beanstandete Schluessel). Den dritten Wert braucht die Markierung des
+ *  Feldes nach einer Beanstandung (X-2). */
 function ap_werte_pruefen($werte)
 {
     $gut = array();
     $mangel = array();
+    $falsch = array();
     foreach ($werte as $k => $v) {
         list($ok, $w, $text) = ap_wert_pruefen((string) $k, $v);
         if ($ok) {
             $gut[$k] = $w;
         } else {
             $mangel[] = $text;
+            $falsch[] = (string) $k;
         }
     }
-    return array($gut, $mangel);
+    return array($gut, $mangel, $falsch);
 }
 
 /** Hinweis nach einem Speichern, das das Praefix wechselt oder MQTT abschaltet (M4). */
@@ -1495,7 +1544,70 @@ function ap_meldung_abholen()
         'hinweise'    => $liste('hinweise'),
         'test_titel'  => $text('test_titel'),
         'test_text'   => $text('test_text'),
+        'eingaben'    => ap_eingaben_lesen(isset($d['eingaben']) ? $d['eingaben'] : null),
     );
+}
+
+/* ---------------- Eingaben nach einer Beanstandung (X-2) ----------------
+ * Regeln/04, "Nach einer Beanstandung stehen die eingetippten Werte wieder im
+ * Formular" (Hausregel seit 30.09.2026, Anlass APC-UPS 1.2.14 gemessen): Mit
+ * der Einmalmeldung reisen die Eingaben des EINEN beanstandeten Formulars,
+ * nur seine Felder, und die beanstandeten Schluessel. Rechte, Ort und Alter
+ * sind die der Einmalmeldung (0600, Datenordner, 120 s, beim GET geloescht).
+ * Geheimnisse gibt es in beiden Formularen keine; das Formularmerkmal ist
+ * kein Formularfeld und wird von ap_meldung_ablegen() ohnehin ersetzt. */
+function ap_eingaben_felder($formular)
+{
+    $felder = array(
+        'settings' => array('enabled', 'intervall', 'aktualisierung', 'host',
+                            'vorwarn_min', 'vorwarn_prozent', 'log_kb',
+                            'benachrichtigung', 'email', 'email_an'),
+        'mqtt'     => array('mqtt', 'themenpraefix', 'rohfelder'),
+    );
+    return isset($felder[$formular]) ? $felder[$formular] : array();
+}
+
+/** Die Eingaben eines beanstandeten Formulars fuer die Einmalmeldung. Ein Wert,
+ *  der keine Zeichenkette ist (etwa host[]=x), reist als leeres Feld. */
+function ap_eingaben_merken($formular, $werte, $falsch)
+{
+    $felder = ap_eingaben_felder($formular);
+    $aus = array();
+    foreach ($felder as $k) {
+        if (array_key_exists($k, $werte)) {
+            $aus[$k] = is_string($werte[$k]) ? $werte[$k] : '';
+        }
+    }
+    return array('formular' => $formular, 'werte' => $aus,
+                 'falsch'   => array_values(array_intersect($felder, (array) $falsch)));
+}
+
+/** Die Eingaben aus der Einmalmeldung - nur bekannte Formulare und Felder,
+ *  nur Zeichenketten. null, wenn nichts Brauchbares darin steht. */
+function ap_eingaben_lesen($e)
+{
+    if (!is_array($e) || !isset($e['formular']) || !is_string($e['formular'])) {
+        return null;
+    }
+    $felder = ap_eingaben_felder($e['formular']);
+    if (!$felder) {
+        return null;
+    }
+    $werte = array();
+    if (isset($e['werte']) && is_array($e['werte'])) {
+        foreach ($felder as $k) {
+            if (isset($e['werte'][$k]) && is_string($e['werte'][$k])) {
+                $werte[$k] = $e['werte'][$k];
+            }
+        }
+    }
+    $falsch = (isset($e['falsch']) && is_array($e['falsch']))
+        ? array_values(array_intersect($felder, array_filter($e['falsch'], 'is_string')))
+        : array();
+    if (!$werte) {
+        return null;
+    }
+    return array('formular' => $e['formular'], 'werte' => $werte, 'falsch' => $falsch);
 }
 
 /**

@@ -4,6 +4,22 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.15
+
+Verbesserungen aus dem Durchgang vom 30.09.2026 (Verbesserungsliste
+`Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`). Gemessen unter PHP 7.4,
+8.4 und 8.5 an der Oberfläche; nicht am Gerät.
+
+* **Nach einer Beanstandung stehen die eingetippten Werte wieder im Formular**
+  (Einstellungen und MQTT). Das beanstandete Feld ist rot umrandet; gespeichert
+  bleibt der bisherige Stand. Bis 1.2.14 stand wieder der alte Stand im
+  Formular, und alles Getippte war weg. Nach erfolgreichem Speichern zeigt die
+  Seite wie bisher die gespeicherten Werte.
+* **„Einstellungen sichern“ warnt gelb**, wenn die eigene Sicherung beim
+  Zurückspielen abgewiesen würde – etwa bei einem von Hand geänderten Wert oder
+  dem Altwert `apcups/` als Präfix. Die Datei kommt trotzdem und trägt dann
+  `_warnung` mit den Namen der Einstellungen, ohne ihre Werte.
+
 ## Neu in 1.2.14
 
 Die Durchsicht vom 29.09.2026 hatte vier Prüfer (Code, Oberfläche, Installer, MQTT). Jeder Punkt ist gemessen. Zu
