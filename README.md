@@ -4,6 +4,24 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.16
+
+Verbesserungen aus dem Durchgang (Verbesserungsliste
+`Pruefung-Durchgang-2026-09-29/VERBESSERUNGEN_OFFEN.md`, Entscheidung 19).
+Gemessen unter PHP 7.4, 8.4 und 8.5; nicht am Gerät.
+
+* **Ein Rohfeld, das kein apcaccess-Feldname ist, oder ein doppelter Name
+  verhindert das Speichern,** auch der übrigen MQTT-Einstellungen. Das Feld ist
+  markiert, die Eingabe steht wieder darin. Bisher wurde das Stück still
+  weggelassen und der Rest gespeichert; ein Feld als Liste wurde als „ARRAY“
+  gespeichert.
+* Kleinbuchstaben werden weiterhin zu Großbuchstaben; Komma, Semikolon und
+  Leerzeichen trennen gleichermaßen.
+* Eine Sicherung mit doppeltem Rohfeld wird beim Zurückspielen abgewiesen;
+  „Einstellungen sichern“ warnt vorher.
+* Beanstandete Felder sind zusätzlich für Bildschirmleser markiert
+  (`aria-invalid`).
+
 ## Neu in 1.2.15
 
 Verbesserungen aus dem Durchgang vom 30.09.2026 (Verbesserungsliste

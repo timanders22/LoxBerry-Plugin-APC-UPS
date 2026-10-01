@@ -1414,10 +1414,17 @@ function ap_wert_pruefen($k, $v)
             return ap_praefix_gueltig($v) ? array(true, $v, '')
                 : array(false, '', sprintf(ap_t('MQTT.PRAEFIX_UNGUELTIG'), $v));
         case 'rohfelder':
-            // Die Form, die das Formular speichert: Grossbuchstaben, Komma.
-            return ($v === '' || preg_match('/^[A-Z][A-Z0-9_]{0,31}(,[A-Z][A-Z0-9_]{0,31})*\z/', $v) === 1)
-                ? array(true, $v, '')
-                : array(false, '', sprintf(ap_t('EINST.W_ROHFELDER'), $name, $v));
+            // Die Form, die das Formular speichert: Grossbuchstaben, Komma,
+            // jeder Name einmal. Ein doppelter Name wird beanstandet, nicht
+            // still gestrichen (Nr. 19, 01.10.2026) - wie im Formular.
+            if ($v !== '' && preg_match('/^[A-Z][A-Z0-9_]{0,31}(,[A-Z][A-Z0-9_]{0,31})*\z/', $v) !== 1) {
+                return array(false, '', sprintf(ap_t('EINST.W_ROHFELDER'), $name, $v));
+            }
+            $liste = ($v === '') ? array() : explode(',', $v);
+            $doppelt = array_values(array_unique(array_diff_assoc($liste, array_unique($liste))));
+            return $doppelt
+                ? array(false, '', sprintf(ap_t('MQTT.ROHFELD_DOPPELT'), $name, implode(', ', $doppelt)))
+                : array(true, $v, '');
     }
     if (isset($g[$k])) {
         list($min, $max) = $g[$k];
@@ -1448,6 +1455,51 @@ function ap_werte_pruefen($werte)
         }
     }
     return array($gut, $mangel, $falsch);
+}
+
+/**
+ * Das Feld "Rohfelder" aus dem Formular lesen (Nr. 19, 01.10.2026).
+ *
+ * Rueckgabe: array(ok, gespeicherte Form "A,B", Beanstandung). Getrennt wird an
+ * Komma, Semikolon und Leerraum; Kleinbuchstaben werden zu Grossbuchstaben.
+ * Beides aendert keinen Namen: apcaccess schreibt jeden Feldnamen gross. Alles
+ * andere wird beanstandet, statt still verworfen zu werden: ein Stueck, das
+ * kein Feldname ist, ein doppelter Name und ein Wert, der keine Zeichenkette
+ * ist. Bis 1.2.16 fielen alle drei still weg (bzw. wurden zu ARRAY), und der
+ * Rest wurde gespeichert. Die gespeicherte Form prueft ap_wert_pruefen().
+ */
+function ap_rohfelder_lesen($v)
+{
+    $name = ap_feld_name('rohfelder');
+    if (!is_string($v)) {
+        return array(false, '', sprintf(ap_t('EINST.W_TYP'), $name, gettype($v)));
+    }
+    $gut = array();
+    $schlecht = array();
+    $doppelt = array();
+    foreach (preg_split('/[,;\s]+/', trim($v), -1, PREG_SPLIT_NO_EMPTY) as $stueck) {
+        $s = strtoupper($stueck);
+        if (preg_match('/^[A-Z][A-Z0-9_]{0,31}\z/', $s) !== 1) {
+            $schlecht[] = $stueck;
+        } elseif (in_array($s, $gut, true)) {
+            if (!in_array($s, $doppelt, true)) {
+                $doppelt[] = $s;
+            }
+        } else {
+            $gut[] = $s;
+        }
+    }
+    $text = array();
+    if ($schlecht) {
+        $text[] = sprintf(ap_t('MQTT.ROHFELD_BEANSTANDET'), $name, implode(', ', $schlecht));
+    }
+    if ($doppelt) {
+        $text[] = sprintf(ap_t('MQTT.ROHFELD_DOPPELT'), $name, implode(', ', $doppelt));
+    }
+    if ($text) {
+        return array(false, '', implode(' ', $text));
+    }
+    return array(true, implode(',', $gut), '');
 }
 
 /** Hinweis nach einem Speichern, das das Praefix wechselt oder MQTT abschaltet (M4). */

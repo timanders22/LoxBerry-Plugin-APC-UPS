@@ -111,13 +111,14 @@ function ap_fwert($formular, $k, $gespeichert)
     return (string) $gespeichert;
 }
 
-/** X-2: Merkmal eines beanstandeten Feldes (roter Rahmen, aria-invalid). */
+/** X-2: Merkmal eines beanstandeten Feldes (roter Rahmen, aria-invalid).
+ *  Klasse sm-beanstandet wie im uebrigen Bestand (bis 1.2.16 sm-falsch). */
 function ap_fmark($formular, $k)
 {
     global $ap_eingaben;
     if (is_array($ap_eingaben) && $ap_eingaben['formular'] === $formular
         && in_array($k, $ap_eingaben['falsch'], true)) {
-        return ' class="sm-falsch" aria-invalid="true"';
+        return ' class="sm-beanstandet" aria-invalid="true"';
     }
     return '';
 }
@@ -298,31 +299,28 @@ if ($ap_ist_post && isset($_POST['save_mqtt'])) {
     $ap_v = isset($_POST['themenpraefix']) ? $_POST['themenpraefix'] : '';
     $eingabe['themenpraefix'] = is_string($ap_v) ? trim($ap_v) : $ap_v;
 
-    // Rohfelder: abweisen und MELDEN, nicht stillschweigend wegschneiden.
-    $rf_roh = trim((string) (isset($_POST['rohfelder']) ? $_POST['rohfelder'] : ''));
-    $rf_gut = array();
-    $schlecht = array();
-    foreach (preg_split('/[,;\s]+/', $rf_roh) as $stueck) {
-        $s = strtoupper(trim($stueck));
-        if ($s === '') {
-            continue;
-        }
-        if (preg_match('/^[A-Z][A-Z0-9_]{0,31}$/', $s)) {
-            if (!in_array($s, $rf_gut, true)) {
-                $rf_gut[] = $s;
-            }
-        } else {
-            $schlecht[] = trim($stueck);
-        }
-    }
-    if ($schlecht) {
-        // Melden, aber das Speichern nicht verhindern: sonst laesst sich ein
-        // zweites Feld nicht eintragen, bevor das erste stimmt.
-        $ap_hinweise[] = sprintf(ap_t('MQTT.ROHFELD_ABGEWIESEN'), implode(', ', $schlecht));
-    }
-    $eingabe['rohfelder'] = implode(',', $rf_gut);
+    /* Nr. 19 (01.10.2026): Rohfelder beanstanden statt still verwerfen. Bis
+     * 1.2.16 wurde ein unzulaessiges Stueck weggelassen, ein doppelter Name
+     * still gestrichen und der Rest gespeichert - mit einem gelben Hinweis,
+     * und nach der Umleitung stand im Feld schon der gesaeuberte Stand. Eine
+     * Liste (rohfelder[]=x) wurde zur Zeichenfolge "Array" und als Feld ARRAY
+     * gespeichert. Jetzt verhindert jedes solche Stueck das Speichern, auch
+     * der uebrigen Felder (Nr. 16); das Feld ist markiert, und die Eingabe
+     * kommt so zurueck, wie sie getippt war (X-2). Still bleiben nur Leerraum
+     * am Rand, die Grossschreibung (apcaccess-Namen sind immer gross - das
+     * Gegenstueck zu "Themen kleinschreiben") und die Trenner. Regel:
+     * ap_rohfelder_lesen(). */
+    $rf_post = isset($_POST['rohfelder']) ? $_POST['rohfelder'] : '';
+    $rf_roh = is_string($rf_post) ? trim($rf_post) : $rf_post;
+    list($rf_ok, $rf_wert, $rf_text) = ap_rohfelder_lesen($rf_roh);
+    $eingabe['rohfelder'] = $rf_ok ? $rf_wert : '';
 
     list($ap_gut, $ap_mangel, $ap_falsch) = ap_werte_pruefen($eingabe);
+    if (!$rf_ok) {
+        unset($ap_gut['rohfelder']);
+        $ap_mangel[] = $rf_text;
+        $ap_falsch[] = 'rohfelder';
+    }
     if ($ap_mangel) {
         $ap_fehler[] = ap_t('EINST.NICHT_GESPEICHERT');
         foreach ($ap_mangel as $ap_m) {
@@ -578,7 +576,7 @@ if ($ap_frame) {
 .sm-zeile { display: flex; gap: 12px; flex-wrap: wrap; }
 .sm-zeile > div { flex: 1; min-width: 190px; }
 /* Ergaenzung (X-2): ein beanstandetes Feld nach der Umleitung. */
-.sm-wrap input.sm-falsch { border: 2px solid #b00000 !important; background: #fff4f4; }
+.sm-wrap input.sm-beanstandet { border: 2px solid #b00000 !important; background: #fff4f4; }
 </style>
 <div class="sm-wrap">
 
