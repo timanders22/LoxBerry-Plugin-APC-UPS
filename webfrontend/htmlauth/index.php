@@ -662,6 +662,7 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
 
 <!-- ================= Reiter: Einstellungen ================= -->
 <div class="sm-seite<?php echo ap_aktiv('tab-settings'); ?>" id="tab-settings">
+<div class="sm-hinweis"><?php echo ap_t('EINST.WAS_IST_DAS'); ?></div>
 
 <?php if ($ap_w) {
     $lad = ap_hat($ap_w, 'battery_charge') ? (float) $ap_w['battery_charge'] : null;
