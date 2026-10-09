@@ -4,6 +4,16 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.19
+
+Reiter „Einbindung in Loxone“ zeigt ein Bild der Bausteine aus dem gemeinsamen Musterprojekt und
+verlinkt die Projektdatei.
+
+* Unter der Baustein-Liste (Schritt 6) steht das Bild der Seite „APC-UPS NG“ aus dem
+  [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt); das Bild liegt im Plugin,
+  nachgeladen wird nichts. Config kürzt lange Bausteinnamen, die vollen Namen stehen in der Tabelle.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
+
 ## Neu in 1.2.18
 
 Baustein-Liste in der Schreibweise des Leitungswerkzeugs.
@@ -838,6 +848,10 @@ Voreingestelltes Präfix: `apcups`. **Nicht alle Themen sind retained** — 20 v
 Messwerte nicht: wer sich nach einer Stunde neu verbindet, bekäme sonst
 eine stundenalte Restlaufzeit serviert und hielte sie für aktuell. Wie
 frisch ein Wert ist, sagt `<Präfix>/timestamp`.
+
+Die Bausteine der Baustein-Liste aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden
+auf der Seite „APC-UPS NG“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
+einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
 ## Notabschaltung
 

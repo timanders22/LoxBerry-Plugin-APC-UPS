@@ -577,6 +577,10 @@ if ($ap_frame) {
 .sm-zeile > div { flex: 1; min-width: 190px; }
 /* Ergaenzung (X-2): ein beanstandetes Feld nach der Umleitung. */
 .sm-wrap input.sm-beanstandet { border: 2px solid #b00000 !important; background: #fff4f4; }
+/* Ergaenzung (Welle Bild, Entscheidung 45): Bild der Bausteine aus dem gemeinsamen Musterprojekt. */
+.sm-bild { margin: 12px 0; }
+.sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+.sm-bild figcaption { font-size: .9em; color: #555; margin-top: 4px; }
 </style>
 <div class="sm-wrap">
 
@@ -984,6 +988,11 @@ $ap_kachel(ap_t('MQTT.PRAEFIX'), ap_e($ap_praefix));
 <b>Zu #13:</b> <?php echo ap_t('LOXONE.ZU_12'); ?><br>
 <b>Zu #6:</b> <?php echo ap_t('LOXONE.ZU_6'); ?>
 </div>
+<figure class="sm-bild">
+<img src="einbindung_loxone.png" alt="<?php echo ap_e(ap_t('LOXONE.BILD_ALT')); ?>" loading="lazy">
+<figcaption><?php echo ap_e(ap_t('LOXONE.BILD_UNTERSCHRIFT')); ?></figcaption>
+</figure>
+<p class="sm-hilfe"><?php echo ap_t('LOXONE.MUSTERPROJEKT'); ?></p>
 
 <h2><?php echo ap_e(ap_t('LOXONE.SCHRITT7')); ?></h2>
 <div class="sm-step"><?php echo ap_t('LOXONE.SCHRITT7_TEXT'); ?></div>
