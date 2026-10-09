@@ -4,6 +4,16 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.18
+
+Baustein-Liste in der Schreibweise des Leitungswerkzeugs.
+
+* **Baustein-Liste (Reiter Einbindung in Loxone, Schritt 6):** An den beiden ODER-Bausteinen
+  nennt die Spalte „Eingänge verbinden mit“ die Eingänge ausdrücklich (`I1 = #8, I2 = #4`);
+  beim ersten virtuellen Eingang steht der Hinweis „kommt über das Gateway“ in Klammern hinter
+  dem Strich wie bei den übrigen Eingängen. Gleiche Bausteine, gleiche Verbindungen.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
+
 ## Neu in 1.2.17
 
 Kopf wie alle Hausplugins: Statusübersicht über den Reitern, Zusammenfassung oben im ersten Reiter.

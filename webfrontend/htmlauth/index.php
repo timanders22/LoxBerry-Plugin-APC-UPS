@@ -958,7 +958,7 @@ $ap_kachel(ap_t('MQTT.PRAEFIX'), ap_e($ap_praefix));
 <th><?php echo ap_e(ap_t('LOXONE.SP_NAME')); ?></th>
 <th><?php echo ap_e(ap_t('LOXONE.SP_PARAMETER')); ?></th>
 <th><?php echo ap_e(ap_t('LOXONE.SP_EINGAENGE')); ?></th></tr>
-<tr><td>1</td><td><?php echo ap_e(ap_t('LOXONE.B_VE')); ?></td><td class="sm-mono"><?php echo ap_e($ap_praefix); ?>_on_battery</td><td>digital</td><td><?php echo ap_e(ap_t('LOXONE.B_VOM_GATEWAY')); ?></td></tr>
+<tr><td>1</td><td><?php echo ap_e(ap_t('LOXONE.B_VE')); ?></td><td class="sm-mono"><?php echo ap_e($ap_praefix); ?>_on_battery</td><td>digital</td><td>&mdash; (<?php echo ap_e(ap_t('LOXONE.B_VOM_GATEWAY')); ?>)</td></tr>
 <tr><td>2</td><td><?php echo ap_e(ap_t('LOXONE.B_VE')); ?></td><td class="sm-mono"><?php echo ap_e($ap_praefix); ?>_alarm_level</td><td>analog 0..3</td><td>&mdash;</td></tr>
 <tr><td>3</td><td><?php echo ap_e(ap_t('LOXONE.B_VE')); ?></td><td class="sm-mono"><?php echo ap_e($ap_praefix); ?>_data_valid</td><td>digital</td><td>&mdash;</td></tr>
 <tr><td>4</td><td><?php echo ap_e(ap_t('LOXONE.B_VE')); ?></td><td class="sm-mono"><?php echo ap_e($ap_praefix); ?>_replace_battery</td><td>digital</td><td>&mdash;</td></tr>
@@ -970,8 +970,8 @@ $ap_kachel(ap_t('MQTT.PRAEFIX'), ap_e($ap_praefix));
 <?php /* U7 (1.2.14): bis 1.2.13 stand hier ein ODER mit drei Eingaengen
    (#8, #4, #9); Regeln/04 Regel A4 verlangt die Kaskade. Die Folgenummern
    sind nachgezogen. */ ?>
-<tr><td>10</td><td><?php echo ap_e(ap_t('LOXONE.B_ODER')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_SAMMEL_TEIL')); ?></td><td>&mdash;</td><td>#8, #4</td></tr>
-<tr><td>11</td><td><?php echo ap_e(ap_t('LOXONE.B_ODER')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_SAMMEL')); ?></td><td>&mdash;</td><td>#10, #9</td></tr>
+<tr><td>10</td><td><?php echo ap_e(ap_t('LOXONE.B_ODER')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_SAMMEL_TEIL')); ?></td><td>&mdash;</td><td>I1 = #8, I2 = #4</td></tr>
+<tr><td>11</td><td><?php echo ap_e(ap_t('LOXONE.B_ODER')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_SAMMEL')); ?></td><td>&mdash;</td><td>I1 = #10, I2 = #9</td></tr>
 <tr><td>12</td><td><?php echo ap_e(ap_t('LOXONE.B_BENACHR')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_MELDUNG')); ?></td><td><?php echo ap_e(ap_t('LOXONE.P_MELDETEXT')); ?></td><td><?php echo ap_e(ap_t('LOXONE.E_EINGANG')); ?> #11</td></tr>
 <tr><td>13</td><td><?php echo ap_e(ap_t('LOXONE.B_SCHWELL')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_LASTABWURF')); ?></td><td><?php echo ap_e(ap_t('LOXONE.P_SCHWELL')); ?></td><td><?php echo ap_e(ap_t('LOXONE.E_EINGANG')); ?> #2</td></tr>
 <tr><td>14</td><td><?php echo ap_e(ap_t('LOXONE.B_MERKER')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_STROMSPAREN')); ?></td><td><?php echo ap_e(ap_t('LOXONE.P_VISU')); ?></td><td><?php echo ap_e(ap_t('LOXONE.E_EINGANG')); ?> #13</td></tr>
