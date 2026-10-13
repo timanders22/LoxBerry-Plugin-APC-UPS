@@ -951,7 +951,14 @@ $ap_kachel(ap_t('MQTT.PRAEFIX'), ap_e($ap_praefix));
 <?php /* 1.2.20 (Entwurf Welle 12 ap, Entscheidung 11): Textthemen legt das Gateway nicht selbst an -
        der Satz nennt den Namen, unter dem man sie von Hand anlegt (Beispiel status). */ ?>
 <p class="sm-hilfe"><?php echo ap_e(sprintf(ap_t('LOXONE.VORLAGE_ZAHL'),
-    count(ap_vorlage_themen()), count(ap_text_themen()), str_replace('/', '_', $ap_praefix . '_status'))); ?></p>
+    count(ap_vorlage_themen()), count(ap_text_themen()), ap_gateway_name($ap_praefix, 'status'))); ?></p>
+<?php /* 1.2.21 (Hausherr 14.10.2026): Ein Praefix mit Ebenen (haus/apcups) heisst in Loxone mit
+       Unterstrich - so benennt das MQTT-Gateway die Eingaenge, und so heissen sie in der Vorlage und in
+       den Baustein-Listen (ap_gateway_name()). Beim Vorgabe-Praefix erscheint der Hinweis nicht. */ ?>
+<?php if (strpos((string) $ap_praefix, '/') !== false) { ?>
+<div class="sm-hinweis"><?php echo ap_e(sprintf(ap_t('LOXONE.PRAEFIX_SCHRAEG'), $ap_praefix,
+    ap_gateway_name($ap_praefix, 'status'), $ap_praefix . '_status')); ?></div>
+<?php } ?>
 <p><b><?php echo ap_e(ap_t('LOXONE.IMPORT_DOPPELT')); ?></b></p>
 </div>
 
@@ -988,9 +995,10 @@ if (preg_match_all('/<VirtualInHttpCmd Title="([^"]*)"/', $ap_bs_vxml, $ap_bs_tr
         $ap_bs_vi_titel[$ap_bs_th] = html_entity_decode($ap_bs_treffer[1][$ap_bs_i], ENT_QUOTES | ENT_XML1, 'UTF-8');
     }
 }
-/* Name, den das MQTT-Gateway vergibt: Praefix und Thema, Schraegstriche zu Unterstrichen. */
+/* Name, den das MQTT-Gateway vergibt: Praefix und Thema, Schraegstriche zu Unterstrichen
+ * (1.2.21: ap_gateway_name(), dieselbe Funktion wie die Titel der Vorlage). */
 $ap_bs_gw = function ($thema) use ($ap_praefix) {
-    return str_replace('/', '_', $ap_praefix . '_' . $thema);
+    return ap_gateway_name($ap_praefix, $thema);
 };
 $ap_bs_vi = function ($thema) use ($ap_bs_vi_titel, $ap_bs_gw) {
     return isset($ap_bs_vi_titel[$thema]) ? $ap_bs_vi_titel[$thema] : $ap_bs_gw($thema);

@@ -911,6 +911,24 @@ function ap_text_themen()
 }
 
 /**
+ * Name, unter dem das MQTT-Gateway ein Thema in Loxone fuehrt: Praefix_Thema, jeder Schraegstrich
+ * und jedes % zu _ (Regeln/07, "Umbenennungsregel des MQTT-Gateways: nur / und % werden zu _,
+ * Punkte bleiben"; sbin/mqttgateway.pl im HTTP-Betrieb). Dieselbe Funktion fuer die Titel der
+ * MQTT-Vorlage und fuer jeden Namen, den der Reiter "Einbindung in Loxone" nennt.
+ *
+ * 1.2.21: bis 1.2.20 ersetzte ap_vorlage() den Schraegstrich nur im Thema, nicht im Praefix. Bei
+ * einem Praefix mit Ebenen (haus/apcups, von ap_praefix_gueltig() erlaubt) hiess der Eingang der
+ * Vorlage haus/apcups_on_battery, das Gateway lieferte an haus_apcups_on_battery - der Eingang der
+ * Vorlage bekam keinen Wert. Beim Vorgabe-Praefix apcups ist das Ergebnis dasselbe wie vorher.
+ * Ein % kann weder im Praefix noch in einem Thema stehen; es steht hier, damit die Regel
+ * vollstaendig ist.
+ */
+function ap_gateway_name($praefix, $thema)
+{
+    return str_replace(array('/', '%'), '_', $praefix . '_' . $thema);
+}
+
+/**
  * Vorlage erzeugen. $art ist 'mqtt_in' oder 'xml_in'.
  * Rueckgabe: array(dateiname, inhalt)
  *
@@ -968,7 +986,8 @@ function ap_vorlage($cfg, $art)
     $cmds = array();
     foreach (ap_vorlage_themen() as $schluessel => $info) {
         $cmds[] = array(
-            'title'   => $praefix . '_' . str_replace('/', '_', $schluessel),
+            // 1.2.21: Name wie das MQTT-Gateway ihn vergibt - auch im Praefix '/' zu '_'.
+            'title'   => ap_gateway_name($praefix, $schluessel),
             'comment' => ap_thema_text($schluessel),
             'einheit' => $info['einheit'],
             'min'     => $info['min'],

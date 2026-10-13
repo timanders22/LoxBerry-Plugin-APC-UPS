@@ -4,6 +4,18 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.21
+
+* **Themenpräfix mit Schrägstrich:** Bei einem Präfix mit Ebenen wie `haus/apcups` hießen die Eingänge der
+  MQTT-Vorlage bisher `haus/apcups_on_battery` usw., das MQTT-Gateway liefert die Werte aber an
+  `haus_apcups_on_battery` – die Eingänge aus der Vorlage bekamen so keinen Wert. Die Vorlage, die
+  Baustein-Listen und alle Namen im Reiter „Einbindung in Loxone“ folgen jetzt der Regel des Gateways
+  (Schrägstrich wird zu `_`), und der Reiter weist bei einem solchen Präfix darauf hin. Wer mit einem
+  solchen Präfix die Vorlage schon importiert hat, benennt die betroffenen Eingänge in Loxone von Hand
+  um (Name wie in der Tabelle) – ein zweiter Import legt doppelte Objekte an. Beim Vorgabe-Präfix
+  `apcups` ändert sich nichts.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
+
 ## Neu in 1.2.20
 
 Vollausstattung aus dem [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt) mit zwei Bildern und
