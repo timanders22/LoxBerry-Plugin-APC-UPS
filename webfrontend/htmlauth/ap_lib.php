@@ -882,8 +882,11 @@ function ap_xml_virtual_in_http($kopf, $cmds)
  * belegt, und ein Analogeingang auf einem Text zeigt dauerhaft 0. Bis 1.1.6
  * legte die Vorlage fuer sechs Textthemen genau solche Eingaenge an.
  *
- * Sie gehen deshalb nicht verloren: das MQTT-Gateway legt beim ersten
- * Empfang selbst einen passenden Eingang an. Die Oberflaeche sagt das.
+ * Sie gehen deshalb nicht verloren: in Loxone legt man sie von Hand als
+ * Virtuellen Texteingang an, Titel = Praefix_Thema (z. B. apcups_status).
+ * Bis 1.2.19 stand hier, das MQTT-Gateway lege sie beim ersten Empfang
+ * selbst an - das tut es nicht (Entwurf Welle 12 ap, Entscheidung 11).
+ * Die Oberflaeche sagt das (LOXONE.VORLAGE_ZAHL, Baustein-Listen).
  */
 function ap_vorlage_themen()
 {
@@ -917,7 +920,12 @@ function ap_text_themen()
 function ap_vorlage($cfg, $art)
 {
     $praefix = ap_cfg($cfg, 'themenpraefix', 'apcups');
-    $fuss = 'Erzeugt vom LoxBerry-Plugin APC-UPS NG (' . date('d.m.Y') . ')';
+    // 1.2.20 (Sprachregel 13.10.2026, Entwurf Welle 12 ap, Entscheidung 10): Titel bleiben fest im
+    // Code - sie werden in Config zu Namen und muessen zu Musterprojekt, Baustein-Liste und
+    // Gateway-Namen passen. Kommentare (Wurzel-Comment, Comment der Befehle) und HintText sind reine
+    // Beschreibung und kommen aus der Sprachdatei. Bis 1.2.19 standen Wurzel-Comment, HintText und
+    // die Kommentare der XML-Vorlage fest deutsch hier.
+    $fuss = sprintf(ap_t('LOXONE.VORLAGE_FUSS'), date('d.m.Y'));
 
     if ($art === 'xml_in') {
         // Der alte Weg: Loxone holt die XML-Seite selbst und zieht die Werte
@@ -932,16 +940,19 @@ function ap_vorlage($cfg, $art)
         // Ersatz fuer den Netzausfall auf diesem Weg: BCHARGE und LINEV
         // fallen bei einem Ausfall sichtbar ab, und wer den Zustandstext
         // wirklich braucht, nimmt den MQTT-Weg.
+        // Erstes Element: das MQTT-Thema derselben Groesse - dessen Beschriftung aus [THEMA]
+        // wird der Comment (1.2.20; bis 1.2.19 fest deutsch: Akkuladung, Restlaufzeit,
+        // Netzspannung, Auslastung, Umschaltungen - deutsch ist es dieselbe Beschriftung).
         $felder = array(
-            'BCHARGE'  => array('Akkuladung', '%', 0, 100),
-            'TIMELEFT' => array('Restlaufzeit', 'min', 0, 9999),
-            'LINEV'    => array('Netzspannung', 'V', 0, 300),
-            'LOADPCT'  => array('Auslastung', '%', 0, 100),
-            'NUMXFERS' => array('Umschaltungen', '', 0, 999999),
+            'BCHARGE'  => array('battery_charge', '%', 0, 100),
+            'TIMELEFT' => array('time_left', 'min', 0, 9999),
+            'LINEV'    => array('line_voltage', 'V', 0, 300),
+            'LOADPCT'  => array('load_percent', '%', 0, 100),
+            'NUMXFERS' => array('transfers', '', 0, 999999),
         );
         $cmds = array();
         foreach ($felder as $feld => $t) {
-            $cmds[] = array('title' => 'APCUPS_' . $feld, 'comment' => $t[0],
+            $cmds[] = array('title' => 'APCUPS_' . $feld, 'comment' => ap_thema_text($t[0]),
                             'einheit' => $t[1], 'min' => $t[2], 'max' => $t[3],
                             'check' => '<' . $feld . '>\v');
         }
@@ -950,8 +961,7 @@ function ap_vorlage($cfg, $art)
             'address' => 'http://' . $host . '/plugins/' . ap_paths()['plugin'] . '/index.php',
             'polling' => '60',
             'comment' => $fuss,
-            'hint'    => 'Die Adresse ist ein Vorschlag - bitte pruefen, unter '
-                       . 'welchem Namen der Miniserver den LoxBerry erreicht.',
+            'hint'    => ap_t('LOXONE.VORLAGE_HINWEIS_XML'),
         ), $cmds));
     }
 
@@ -971,7 +981,7 @@ function ap_vorlage($cfg, $art)
         'address' => 'http://localhost',
         'polling' => '604800',
         'comment' => $fuss,
-        'hint'    => 'Die Werte kommen vom MQTT-Gateway, nicht von dieser Adresse.',
+        'hint'    => ap_t('LOXONE.VORLAGE_HINWEIS_MQTT'),
     ), $cmds));
 }
 

@@ -581,6 +581,11 @@ if ($ap_frame) {
 .sm-bild { margin: 12px 0; }
 .sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
 .sm-bild figcaption { font-size: .9em; color: #555; margin-top: 4px; }
+/* Welle Bild 12 VOLL (1.2.20): Abschnitte, Schritte und Hinweise je Baustein-Liste. */
+.sm-wrap h4.sm-h4 { color: #4f7d17; font-size: 0.98em; font-weight: 700; margin: 22px 0 4px;
+    padding-top: 10px; border-top: 1px solid #e0e0e0; }
+.sm-schritte { margin: 6px 0 0 18px; padding: 0; }
+.sm-schritte li { margin: 3px 0; }
 </style>
 <div class="sm-wrap">
 
@@ -943,8 +948,10 @@ $ap_kachel(ap_t('MQTT.PRAEFIX'), ap_e($ap_praefix));
 <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="xml_in"><?php echo ap_e(ap_t('LOXONE.KNOPF_XML')); ?></button>
 </div>
 </form>
+<?php /* 1.2.20 (Entwurf Welle 12 ap, Entscheidung 11): Textthemen legt das Gateway nicht selbst an -
+       der Satz nennt den Namen, unter dem man sie von Hand anlegt (Beispiel status). */ ?>
 <p class="sm-hilfe"><?php echo ap_e(sprintf(ap_t('LOXONE.VORLAGE_ZAHL'),
-    count(ap_vorlage_themen()), count(ap_text_themen()))); ?></p>
+    count(ap_vorlage_themen()), count(ap_text_themen()), str_replace('/', '_', $ap_praefix . '_status'))); ?></p>
 <p><b><?php echo ap_e(ap_t('LOXONE.IMPORT_DOPPELT')); ?></b></p>
 </div>
 
@@ -955,44 +962,216 @@ $ap_kachel(ap_t('MQTT.PRAEFIX'), ap_e($ap_praefix));
 <div class="sm-step"><?php echo ap_t('LOXONE.SCHRITT5_TEXT'); ?></div>
 
 <h2><?php echo ap_e(ap_t('LOXONE.SCHRITT6')); ?></h2>
+<?php
+/* Welle Bild 12 VOLL (1.2.20, Hausherr 11.10.2026: Vollausstattung, ein absoluter Laie soll das
+ * Maximum leicht uebernehmen koennen; Entscheidungen 13.10.2026, Entwurf Welle 12 ap, alle 14 wie
+ * empfohlen): zwei Seiten aus dem LoxBerry-Plugins Musterprojekt, dort in Loxone Config gebaut und
+ * mit leitungen_setzen.py verbunden (Musterprojekt/baustein_listen.txt, Abschnitte "APC-UPS NG" 36
+ * und "APC-UPS NG Akku und Netz" 42 Zeilen). Je Seite: Ueberschrift, Kasten "So uebernehmen Sie
+ * diese Seite", Tabelle, Hinweise, Bild, Link - alle immer sichtbar. Bis 1.2.19 stand hier eine
+ * Liste mit 15 Zeilen.
+ * Die Namen der Eingaenge kommen aus DEMSELBEN XML wie der Knopf "Vorlage fuer den MQTT-Weg
+ * erzeugen" (ap_vorlage()), der Vorlagentitel aus dessen Kopf. Die Virtuellen Texteingaenge legt
+ * keine Vorlage an (Regeln/07); ihr Name ist der Name, den das MQTT-Gateway vergibt (Praefix_Thema,
+ * Schraegstriche zu Unterstrichen). Texte aus [LOXONE]; jede Zelle ist fertiges, maskiertes HTML.
+ * Zeile: array(Nr, Typ, Name, Parameter, Eingaenge). */
+list($ap_bs_vdatei, $ap_bs_vxml) = ap_vorlage($ap_cfg, 'mqtt_in');
+$ap_bs_vkopf = 'APC-UPS NG';
+if (preg_match('/<VirtualInHttp [^>]*?Title="([^"]*)"/', $ap_bs_vxml, $ap_bs_treffer)) {
+    $ap_bs_vkopf = html_entity_decode($ap_bs_treffer[1], ENT_QUOTES | ENT_XML1, 'UTF-8');
+}
+$ap_bs_vi_titel = array();
+$ap_bs_themen = array_keys(ap_vorlage_themen());
+if (preg_match_all('/<VirtualInHttpCmd Title="([^"]*)"/', $ap_bs_vxml, $ap_bs_treffer)
+        && count($ap_bs_treffer[1]) === count($ap_bs_themen)) {
+    foreach ($ap_bs_themen as $ap_bs_i => $ap_bs_th) {
+        $ap_bs_vi_titel[$ap_bs_th] = html_entity_decode($ap_bs_treffer[1][$ap_bs_i], ENT_QUOTES | ENT_XML1, 'UTF-8');
+    }
+}
+/* Name, den das MQTT-Gateway vergibt: Praefix und Thema, Schraegstriche zu Unterstrichen. */
+$ap_bs_gw = function ($thema) use ($ap_praefix) {
+    return str_replace('/', '_', $ap_praefix . '_' . $thema);
+};
+$ap_bs_vi = function ($thema) use ($ap_bs_vi_titel, $ap_bs_gw) {
+    return isset($ap_bs_vi_titel[$thema]) ? $ap_bs_vi_titel[$thema] : $ap_bs_gw($thema);
+};
+/* Erst vsprintf auf den Sprachtext, dann maskieren: eingesetzte Namen kommen nie roh heraus. */
+$ap_bs_k = function ($schluessel, $argumente = array()) {
+    $s = (string) ap_t('LOXONE.' . $schluessel);
+    return ap_e($argumente ? vsprintf($s, $argumente) : $s);
+};
+$ap_bs_mono = function ($s) { return '<span class="sm-mono">' . ap_e($s) . '</span>'; };
+$ap_bs_strich = '&mdash;';
+$ap_bs_ein = function ($nr) use ($ap_bs_k) { return $ap_bs_k('E_EIN', array($nr)); };
+$ap_bs_aus = function ($pin, $nr) use ($ap_bs_k) { return $ap_bs_k('E_AUSGANG', array($pin, $nr)); };
+/* Eingang aus der Vorlage "APC-UPS NG": Typ mit Vorlagentitel, Name aus dem XML. */
+$ap_bs_vi_z = function ($nr, $thema, $param, $verb) use ($ap_bs_k, $ap_bs_vi, $ap_bs_mono, $ap_bs_vkopf) {
+    return array($nr, $ap_bs_k('TYP_VI', array($ap_bs_vkopf)), $ap_bs_mono($ap_bs_vi($thema)),
+                 $ap_bs_k($param), $verb);
+};
+/* Virtueller Texteingang: Name = Gateway-Name des Themas. */
+$ap_bs_tx_z = function ($nr, $thema, $param) use ($ap_bs_k, $ap_bs_gw, $ap_bs_mono, $ap_bs_strich) {
+    return array($nr, $ap_bs_k('T_TEXTEIN'), $ap_bs_mono($ap_bs_gw($thema)), $ap_bs_k($param), $ap_bs_strich);
+};
+/* Uebriger Baustein: Typ-Schluessel, Name <S>_NAME, Parameter <S>_PARAM. */
+$ap_bs_zl = function ($nr, $typ, $s, $param, $verb) use ($ap_bs_k, $ap_bs_strich) {
+    return array($nr, $ap_bs_k($typ), $ap_bs_k($s . '_NAME'), $param === '' ? $ap_bs_strich : $ap_bs_k($param),
+                 $verb);
+};
+$ap_bs_seiten = array(
+    array('kopf' => 'BL_S1', 'seite' => 'APC-UPS NG', 'bild' => 'einbindung_loxone.png', 'zeilen' => array(
+        $ap_bs_vi_z(1, 'on_battery', 'S1_01_PARAM', $ap_bs_k('E_GATEWAY')),
+        $ap_bs_vi_z(2, 'alarm_level', 'S1_02_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(3, 'data_valid', 'S1_03_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(4, 'replace_battery', 'S1_04_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(5, 'time_left', 'S1_05_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(6, 'timestamp', 'S1_06_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(7, 'service/online', 'S1_07_PARAM', $ap_bs_strich),
+        $ap_bs_zl(8, 'T_EVZ', 'S1_08', 'S1_08_PARAM', $ap_bs_ein(1)),
+        $ap_bs_zl(9, 'T_NICHT', 'S1_09', '', $ap_bs_ein(3)),
+        $ap_bs_zl(10, 'T_ODER', 'S1_10', '', 'I1 = #8, I2 = #24'),
+        $ap_bs_zl(11, 'T_ODER', 'S1_11', '', 'I1 = #10, I2 = #9'),
+        $ap_bs_zl(12, 'T_BENACHR', 'S1_12', 'S1_12_PARAM', $ap_bs_ein(11)),
+        $ap_bs_zl(13, 'T_SCHWELL', 'S1_13', 'S1_13_PARAM', $ap_bs_ein(2)),
+        $ap_bs_zl(14, 'T_MERKER', 'S1_14', 'S1_14_PARAM', $ap_bs_ein(13)),
+        $ap_bs_zl(15, 'T_STATUS', 'S1_15', 'S1_15_PARAM', 'V1 = #2, V2 = #5, V3 = #16, V4 = #3, V5 = #26, V6 = #34'),
+        $ap_bs_vi_z(16, 'battery_charge', 'S1_16_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(17, 'valid', 'S1_17_PARAM', $ap_bs_strich),
+        $ap_bs_zl(18, 'T_KONSTANTE', 'S1_18', 'S1_18_PARAM', $ap_bs_strich),
+        $ap_bs_zl(19, 'T_VALID', 'S1_19', 'S1_19_PARAM', 'V = #6, En = #18'),
+        $ap_bs_zl(20, 'T_NICHT', 'S1_20', '', 'I = #7'),
+        $ap_bs_zl(21, 'T_NICHT', 'S1_21', '', 'I = #17'),
+        $ap_bs_zl(22, 'T_ODER', 'S1_22', 'S1_22_PARAM', 'I1 = ' . $ap_bs_aus('E', 19) . ', I2 = #20'),
+        $ap_bs_zl(23, 'T_ODER', 'S1_23', 'S1_23_PARAM', 'I1 = #22, I2 = #21'),
+        $ap_bs_zl(24, 'T_EVZ', 'S1_24', 'S1_24_PARAM', $ap_bs_ein(23)),
+        $ap_bs_zl(25, 'T_BENACHR', 'S1_25', 'S1_25_PARAM', $ap_bs_ein(4)),
+        $ap_bs_vi_z(26, 'time_on_battery', 'S1_26_PARAM', $ap_bs_strich),
+        $ap_bs_zl(27, 'T_FLANKE', 'S1_27', '', $ap_bs_ein(8)),
+        $ap_bs_zl(28, 'T_BENACHR', 'S1_28', 'S1_28_PARAM', $ap_bs_k('E_EIN_AUSGANG', array('Off', 27))),
+        $ap_bs_zl(29, 'T_EVZ', 'S1_29', 'S1_29_PARAM', $ap_bs_ein(13)),
+        $ap_bs_zl(30, 'T_BENACHR', 'S1_30', 'S1_30_PARAM', $ap_bs_ein(29)),
+        $ap_bs_vi_z(31, 'shutdown_pending', 'S1_31_PARAM', $ap_bs_strich),
+        $ap_bs_zl(32, 'T_BENACHR', 'S1_32', 'S1_32_PARAM', $ap_bs_ein(31)),
+        $ap_bs_tx_z(33, 'status', 'S1_33_PARAM'),
+        $ap_bs_tx_z(34, 'event', 'S1_34_PARAM'),
+        $ap_bs_tx_z(35, 'last_error', 'S1_35_PARAM'),
+        $ap_bs_zl(36, 'T_STATUS', 'S1_36', 'S1_36_PARAM', 'V1 = #7, V2 = ' . $ap_bs_aus('E', 19) . ', V3 = #6, V4 = #17, V5 = #35, V6 = #3, V7 = #33'),
+        ),
+        'schritte' => array(
+            array('S1_SCHRITT1', array(ap_t('REITER.TEST'), ap_t('TEST.K_ABFRAGEN'), ap_t('REITER.EINSTELLUNGEN'), ap_t('EINST.PLUGIN_EINGESCHALTET'))),
+            array('S1_SCHRITT2', array($ap_praefix . '/#', $ap_praefix)),
+            array('S1_SCHRITT3', array(ap_t('LOXONE.KNOPF_MQTT'), $ap_bs_vdatei)),
+            array('S1_SCHRITT4', array($ap_bs_gw('status'), $ap_bs_gw('event'), $ap_bs_gw('last_error'))),
+            array('S1_SCHRITT5', array($ap_bs_vkopf, implode(', ', array_map($ap_bs_vi, array('on_battery', 'alarm_level', 'data_valid', 'replace_battery', 'time_left', 'timestamp', 'service/online', 'battery_charge', 'valid', 'time_on_battery', 'shutdown_pending'))))),
+            array('S1_SCHRITT6', array()),
+            array('S1_SCHRITT7', array()),
+            array('S1_SCHRITT8', array(ap_t('LOXONE.SP_EINGAENGE'), ap_t('LOXONE.SP_PARAMETER'))),
+            array('S1_SCHRITT9', array($ap_bs_vi('timestamp'), ap_t('REITER.TEST'), ap_t('TEST.K_WERTE'))),
+        ),
+        'hinweise' => array(
+            array('S1_H1', array()),
+            array('S1_H2', array()),
+            array('S1_H3', array()),
+            array('S1_H4', array(ap_t('EINST.INTERVALL'))),
+            array('S1_H5', array()),
+            array('S1_H6', array(ap_t('LOXONE.SP_NAME'))),
+            array('S1_H7', array()),
+            array('S1_H8', array(ap_t('REITER.EINSTELLUNGEN'), ap_t('EINST.MELDEWEGE'))),
+        )),
+    array('kopf' => 'BL_S2', 'seite' => 'APC-UPS NG Akku und Netz', 'bild' => 'einbindung_loxone_akku_netz.png', 'zeilen' => array(
+        $ap_bs_vi_z(1, 'battery_charge', 'S2_01_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(2, 'load_percent', 'S2_02_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(3, 'load_watt', 'S2_03_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(4, 'nominal_power', 'S2_04_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(5, 'line_voltage', 'S2_05_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(6, 'output_voltage', 'S2_06_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(7, 'line_frequency', 'S2_07_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(8, 'battery_voltage', 'S2_08_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(9, 'nominal_battery_volt', 'S2_09_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(10, 'internal_temp', 'S2_10_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(11, 'battery_age_months', 'S2_11_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(12, 'replace_battery', 'S2_12_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(13, 'transfers', 'S2_13_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(14, 'cumulative_on_battery', 'S2_14_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(15, 'shutdown_charge', 'S2_15_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(16, 'shutdown_minutes', 'S2_16_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(17, 'shutdown_timeout', 'S2_17_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(18, 'on_line', 'S2_18_PARAM', $ap_bs_strich),
+        $ap_bs_tx_z(19, 'model', 'S2_19_PARAM'),
+        $ap_bs_tx_z(20, 'serial', 'S2_20_PARAM'),
+        $ap_bs_tx_z(21, 'battery_date', 'S2_21_PARAM'),
+        $ap_bs_tx_z(22, 'self_test_result', 'S2_22_PARAM'),
+        $ap_bs_tx_z(23, 'self_test_interval', 'S2_23_PARAM'),
+        $ap_bs_tx_z(24, 'last_transfer', 'S2_24_PARAM'),
+        $ap_bs_zl(25, 'T_SCHWELL', 'S2_25', 'S2_25_PARAM', $ap_bs_ein(2)),
+        $ap_bs_zl(26, 'T_EVZ', 'S2_26', 'S2_26_PARAM', $ap_bs_ein(25)),
+        $ap_bs_zl(27, 'T_BENACHR', 'S2_27', 'S2_27_PARAM', $ap_bs_ein(26)),
+        $ap_bs_zl(28, 'T_SCHWELL', 'S2_28', 'S2_28_PARAM', $ap_bs_ein(10)),
+        $ap_bs_zl(29, 'T_EVZ', 'S2_29', 'S2_29_PARAM', $ap_bs_ein(28)),
+        $ap_bs_zl(30, 'T_BENACHR', 'S2_30', 'S2_30_PARAM', $ap_bs_ein(29)),
+        $ap_bs_zl(31, 'T_SCHWELL', 'S2_31', 'S2_31_PARAM', $ap_bs_ein(1)),
+        $ap_bs_zl(32, 'T_UND', 'S2_32', 'S2_32_PARAM', 'I1 = #31, I2 = #18'),
+        $ap_bs_zl(33, 'T_EVZ', 'S2_33', 'S2_33_PARAM', $ap_bs_ein(32)),
+        $ap_bs_zl(34, 'T_BENACHR', 'S2_34', 'S2_34_PARAM', $ap_bs_ein(33)),
+        $ap_bs_zl(35, 'T_IMPULS', 'S2_35', 'S2_35_PARAM', $ap_bs_strich),
+        $ap_bs_zl(36, 'T_SPEICHER', 'S2_36', 'S2_36_PARAM', 'V = #13, Set = ' . $ap_bs_aus('Q', 35)),
+        $ap_bs_zl(37, 'T_FORMEL', 'S2_37', 'S2_37_PARAM', 'I1 = #13, I2 = #36'),
+        $ap_bs_zl(38, 'T_SCHWELL', 'S2_38', 'S2_38_PARAM', $ap_bs_ein(37)),
+        $ap_bs_zl(39, 'T_BENACHR', 'S2_39', 'S2_39_PARAM', $ap_bs_ein(38)),
+        $ap_bs_zl(40, 'T_STATUS', 'S2_40', 'S2_40_PARAM', 'V1 = #12, V2 = #1, V3 = #11, V4 = #21, V5 = #8, V6 = #9, V7 = #22, V8 = #14'),
+        $ap_bs_zl(41, 'T_STATUS', 'S2_41', 'S2_41_PARAM', 'V1 = #5, V2 = #7, V3 = #6, V4 = #2, V5 = #3, V6 = #4, V7 = #37, V8 = #24'),
+        $ap_bs_zl(42, 'T_STATUS', 'S2_42', 'S2_42_PARAM', 'V1 = #19, V2 = #20, V3 = #23, V4 = #15, V5 = #16, V6 = #17'),
+        ),
+        'schritte' => array(
+            array('S2_SCHRITT1', array()),
+            array('S2_SCHRITT2', array($ap_bs_gw('model'), $ap_bs_gw('serial'), $ap_bs_gw('battery_date'), $ap_bs_gw('self_test_result'), $ap_bs_gw('self_test_interval'), $ap_bs_gw('last_transfer'))),
+            array('S2_SCHRITT3', array($ap_bs_vkopf, $ap_bs_vi('battery_charge'), $ap_bs_vi('replace_battery'), $ap_bs_vi('battery_charge'), $ap_bs_vi('load_watt'), $ap_bs_vi('line_voltage'), $ap_bs_vi('internal_temp'))),
+            array('S2_SCHRITT4', array()),
+            array('S2_SCHRITT5', array(ap_t('LOXONE.SP_EINGAENGE'), ap_t('LOXONE.SP_PARAMETER'))),
+            array('S2_SCHRITT6', array(ap_t('REITER.TEST'), ap_t('TEST.K_WERTE'))),
+        ),
+        'hinweise' => array(
+            array('S2_H1', array()),
+            array('S2_H2', array($ap_bs_vi('battery_charge'))),
+            array('S2_H3', array()),
+            array('S2_H4', array()),
+            array('S2_H5', array()),
+        )),
+);
+?>
 <p class="sm-hilfe"><?php echo ap_t('LOXONE.BAUSTEINE_VORTEXT'); ?></p>
+<?php foreach ($ap_bs_seiten as $ap_bs_s) { ?>
+<h4 class="sm-h4"><?php echo ap_e(ap_t('LOXONE.' . $ap_bs_s['kopf'])); ?></h4>
+<div class="sm-hinweis"><b><?php echo $ap_bs_k('SCHRITTE_TITEL'); ?></b>
+<ol class="sm-schritte">
+<?php foreach ($ap_bs_s['schritte'] as $ap_bs_x) { ?>
+<li><?php echo $ap_bs_k($ap_bs_x[0], $ap_bs_x[1]); ?></li>
+<?php } ?>
+</ol></div>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th>#</th><th><?php echo ap_e(ap_t('LOXONE.SP_BAUSTEIN')); ?></th>
 <th><?php echo ap_e(ap_t('LOXONE.SP_NAME')); ?></th>
 <th><?php echo ap_e(ap_t('LOXONE.SP_PARAMETER')); ?></th>
 <th><?php echo ap_e(ap_t('LOXONE.SP_EINGAENGE')); ?></th></tr>
-<tr><td>1</td><td><?php echo ap_e(ap_t('LOXONE.B_VE')); ?></td><td class="sm-mono"><?php echo ap_e($ap_praefix); ?>_on_battery</td><td>digital</td><td>&mdash; (<?php echo ap_e(ap_t('LOXONE.B_VOM_GATEWAY')); ?>)</td></tr>
-<tr><td>2</td><td><?php echo ap_e(ap_t('LOXONE.B_VE')); ?></td><td class="sm-mono"><?php echo ap_e($ap_praefix); ?>_alarm_level</td><td>analog 0..3</td><td>&mdash;</td></tr>
-<tr><td>3</td><td><?php echo ap_e(ap_t('LOXONE.B_VE')); ?></td><td class="sm-mono"><?php echo ap_e($ap_praefix); ?>_data_valid</td><td>digital</td><td>&mdash;</td></tr>
-<tr><td>4</td><td><?php echo ap_e(ap_t('LOXONE.B_VE')); ?></td><td class="sm-mono"><?php echo ap_e($ap_praefix); ?>_replace_battery</td><td>digital</td><td>&mdash;</td></tr>
-<tr><td>5</td><td><?php echo ap_e(ap_t('LOXONE.B_VE')); ?></td><td class="sm-mono"><?php echo ap_e($ap_praefix); ?>_time_left</td><td><?php echo ap_e(ap_t('LOXONE.B_ANALOG_MIN')); ?></td><td>&mdash;</td></tr>
-<tr><td>6</td><td><?php echo ap_e(ap_t('LOXONE.B_VE')); ?></td><td class="sm-mono"><?php echo ap_e($ap_praefix); ?>_timestamp</td><td><?php echo ap_e(ap_t('LOXONE.B_ANALOG_S')); ?></td><td>&mdash;</td></tr>
-<tr><td>7</td><td><?php echo ap_e(ap_t('LOXONE.B_VE')); ?></td><td class="sm-mono"><?php echo ap_e($ap_praefix); ?>_service_online</td><td>digital</td><td>&mdash;</td></tr>
-<tr><td>8</td><td><?php echo ap_e(ap_t('LOXONE.B_EINVERZ')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_ENTPRELLT')); ?></td><td>10&nbsp;s</td><td><?php echo ap_e(ap_t('LOXONE.E_EINGANG')); ?> #1</td></tr>
-<tr><td>9</td><td><?php echo ap_e(ap_t('LOXONE.B_NICHT')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_KEINE_DATEN')); ?></td><td>&mdash;</td><td><?php echo ap_e(ap_t('LOXONE.E_EINGANG')); ?> #3</td></tr>
-<?php /* U7 (1.2.14): bis 1.2.13 stand hier ein ODER mit drei Eingaengen
-   (#8, #4, #9); Regeln/04 Regel A4 verlangt die Kaskade. Die Folgenummern
-   sind nachgezogen. */ ?>
-<tr><td>10</td><td><?php echo ap_e(ap_t('LOXONE.B_ODER')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_SAMMEL_TEIL')); ?></td><td>&mdash;</td><td>I1 = #8, I2 = #4</td></tr>
-<tr><td>11</td><td><?php echo ap_e(ap_t('LOXONE.B_ODER')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_SAMMEL')); ?></td><td>&mdash;</td><td>I1 = #10, I2 = #9</td></tr>
-<tr><td>12</td><td><?php echo ap_e(ap_t('LOXONE.B_BENACHR')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_MELDUNG')); ?></td><td><?php echo ap_e(ap_t('LOXONE.P_MELDETEXT')); ?></td><td><?php echo ap_e(ap_t('LOXONE.E_EINGANG')); ?> #11</td></tr>
-<tr><td>13</td><td><?php echo ap_e(ap_t('LOXONE.B_SCHWELL')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_LASTABWURF')); ?></td><td><?php echo ap_e(ap_t('LOXONE.P_SCHWELL')); ?></td><td><?php echo ap_e(ap_t('LOXONE.E_EINGANG')); ?> #2</td></tr>
-<tr><td>14</td><td><?php echo ap_e(ap_t('LOXONE.B_MERKER')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_STROMSPAREN')); ?></td><td><?php echo ap_e(ap_t('LOXONE.P_VISU')); ?></td><td><?php echo ap_e(ap_t('LOXONE.E_EINGANG')); ?> #13</td></tr>
-<tr><td>15</td><td><?php echo ap_e(ap_t('LOXONE.B_STATUS')); ?></td><td><?php echo ap_e(ap_t('LOXONE.N_STATUS')); ?></td><td><?php echo ap_e(ap_t('LOXONE.P_STATUS')); ?></td><td>v1 = #2, v2 = #5</td></tr>
+<?php foreach ($ap_bs_s['zeilen'] as $ap_bs_z) { ?>
+<tr><td><?php echo (int) $ap_bs_z[0]; ?></td><td><?php echo $ap_bs_z[1]; ?></td><td><?php echo $ap_bs_z[2]; ?></td>
+    <td><?php echo $ap_bs_z[3]; ?></td><td><?php echo $ap_bs_z[4]; ?></td></tr>
+<?php } ?>
 </table>
 </div>
-<div class="sm-hinweis">
-<b>Zu #10 bis #12:</b> <?php echo ap_t('LOXONE.ZU_10'); ?><br>
-<b>Zu #8:</b> <?php echo ap_t('LOXONE.ZU_8'); ?><br>
-<b>Zu #13:</b> <?php echo ap_t('LOXONE.ZU_12'); ?><br>
-<b>Zu #6:</b> <?php echo ap_t('LOXONE.ZU_6'); ?>
-</div>
+<div class="sm-warnung"><b><?php echo $ap_bs_k('HINWEISE_TITEL'); ?></b>
+<ul class="sm-schritte">
+<?php foreach ($ap_bs_s['hinweise'] as $ap_bs_x) { ?>
+<li><?php echo $ap_bs_k($ap_bs_x[0], $ap_bs_x[1]); ?></li>
+<?php } ?>
+</ul></div>
 <figure class="sm-bild">
-<img src="einbindung_loxone.png" alt="<?php echo ap_e(ap_t('LOXONE.BILD_ALT')); ?>" loading="lazy">
-<figcaption><?php echo ap_e(ap_t('LOXONE.BILD_UNTERSCHRIFT')); ?></figcaption>
+<img src="<?php echo ap_e($ap_bs_s['bild']); ?>" alt="<?php echo ap_e(sprintf(ap_t('LOXONE.BILD_ALT'), $ap_bs_s['seite'])); ?>" loading="lazy">
+<figcaption><?php echo ap_e(sprintf(ap_t('LOXONE.BILD_UNTERSCHRIFT'), $ap_bs_s['seite'])); ?></figcaption>
 </figure>
 <p class="sm-hilfe"><?php echo ap_t('LOXONE.MUSTERPROJEKT'); ?></p>
+<?php } ?>
 
 <h2><?php echo ap_e(ap_t('LOXONE.SCHRITT7')); ?></h2>
 <div class="sm-step"><?php echo ap_t('LOXONE.SCHRITT7_TEXT'); ?></div>

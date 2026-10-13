@@ -4,6 +4,27 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.20
+
+Vollausstattung aus dem [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt) mit zwei Bildern und
+Schritt-für-Schritt-Anleitung.
+
+* **Reiter Einbindung in Loxone, Schritt 6:** zwei Baustein-Listen statt einer (78 statt 15 Zeilen) –
+  „Zustand, Störung und Stromausfall“ (Stromausfall, Vorwarnung mit Lastabwurf, Abschaltung, Akkutausch,
+  Netz wieder da, gestörte Abfrage) und „Akku, Netz und Last“ (Überlast, Wärme, Akku lädt nicht, Netz
+  unruhig, Gerätedaten) –, je mit Kasten „So übernehmen Sie diese Seite“, Hinweisen und dem Bild der
+  Seite aus dem Musterprojekt. Neun Textthemen (Zustand, Ereignis, Fehlermeldung, Modell, Seriennummer,
+  Akkudatum, Selbsttest, Selbsttest-Abstand, Grund der letzten Umschaltung) als Virtuelle Texteingänge.
+* **Sammelmeldung berichtigt:** Der Akkutausch hält die „USV-Meldung“ nicht mehr dauerhaft an – er hat
+  eine eigene Meldung; an seiner Stelle meldet die Sammelmeldung jetzt eine gestörte Abfrage (Dienst aus,
+  Abfrage stumm, apcupsd antwortet nicht).
+* **Loxone-Vorlagen:** Die Kommentare der Vorlage für den alten XML-Weg sowie Kommentar und Hinweis am
+  Kopf beider Vorlagen kommen aus der Sprachdatei (deutsch/englisch); die Titel bleiben fest. Kein
+  Neuimport nötig.
+* **Textberichtigung:** Die Textthemen legt das MQTT-Gateway nicht selbst an – von Hand als Virtueller
+  Texteingang anlegen, Titel = Präfix_Thema (z. B. `apcups_status`).
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
+
 ## Neu in 1.2.19
 
 Reiter „Einbindung in Loxone“ zeigt ein Bild der Bausteine aus dem gemeinsamen Musterprojekt und
@@ -849,8 +870,8 @@ Messwerte nicht: wer sich nach einer Stunde neu verbindet, bekäme sonst
 eine stundenalte Restlaufzeit serviert und hielte sie für aktuell. Wie
 frisch ein Wert ist, sagt `<Präfix>/timestamp`.
 
-Die Bausteine der Baustein-Liste aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden
-auf der Seite „APC-UPS NG“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
+Die Bausteine der zwei Baustein-Listen aus dem Reiter *Einbindung in Loxone* stehen fertig verbunden
+auf den Seiten „APC-UPS NG“ und „APC-UPS NG Akku und Netz“ im [LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt),
 einer gemeinsamen Projektdatei mit allen Plugin-Seiten und Vorlagen.
 
 ## Notabschaltung
