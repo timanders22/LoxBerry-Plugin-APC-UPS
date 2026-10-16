@@ -1081,6 +1081,7 @@ $ap_bs_seiten = array(
             array('S1_H2', array()),
             array('S1_H3', array()),
             array('S1_H4', array(ap_t('EINST.INTERVALL'))),
+            array('S1_H9', array()),
             array('S1_H5', array()),
             array('S1_H6', array(ap_t('LOXONE.SP_NAME'))),
             array('S1_H7', array()),

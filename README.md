@@ -4,6 +4,10 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.22
+
+* **Einbindung in Loxone: Eingang En der Analogwertvalidierung nicht negieren (Hinweis und Bild);** ohne diese Korrektur löste die Ausfallmeldung nie aus. Config legt den Eingang En negiert an – die Konstante 1 kam dann als 0 an, und die Validierung #19 der Seite „APC-UPS NG“ prüfte die Zeit Tmc nicht. Wer die Seite schon gebaut hat: Haken bei ‚En‘ entfernen (Eigenschaftsfenster, Parameter). Das Bild zeigt den Eingang jetzt ohne Negation. Plugin-Verhalten unverändert.
+
 ## Neu in 1.2.21
 
 * **Themenpräfix mit Schrägstrich:** Bei einem Präfix mit Ebenen wie `haus/apcups` hießen die Eingänge der
