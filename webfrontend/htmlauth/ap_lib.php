@@ -36,6 +36,14 @@
  *    rechnete die Pfade selbst aus, obwohl LoxBerry sie setzt.
  */
 
+/* V1 (1.2.23): die Abschrift der gemeinsamen Sprachausgabe (Stammfassung 1.1.3, byte-gleich) liegt
+ * neben dieser Datei. Sie hat einen Schutz gegen doppeltes Laden und antwortet nur als Einstieg
+ * mit 403. Die Linie braucht sie fuer den Formularblock, die Pruefung der Schluessel tts_*, den
+ * Webport (A2) und die Bruecke bin/ap_ansage.php. */
+if (is_file(__DIR__ . '/sprachausgabe.php')) {
+    require_once __DIR__ . '/sprachausgabe.php';
+}
+
 if (!function_exists('ap_e')) {
     function ap_e($s)
     {
@@ -140,8 +148,9 @@ function ap_paths()
         // der Ablageort htmlauth, und das ist kein Pluginordner.
         $dir = 'apc_ups_ng';
     }
-    $status = is_dir('/run/shm') ? '/run/shm/apc_ups_ng_status.json'
-                                 : '/tmp/apc_ups_ng_status.json';
+    // A14 (1.2.23): der Name traegt den Ordner - fuer apc_ups_ng byte-gleich wie bisher.
+    $status = is_dir('/run/shm') ? '/run/shm/' . $dir . '_status.json'
+                                 : '/tmp/' . $dir . '_status.json';
 
     // Was der Installer gesetzt hat, gilt - selbst ausrechnen ist der
     // zweite Weg, nicht der erste. Bis 1.1.6 wurden LBPCONFIGDIR, LBPBINDIR
@@ -212,6 +221,33 @@ function ap_defaults()
         'vorwarn_prozent'  => '10',
         'rohfelder'        => '',
         'log_kb'           => '512',
+        // --- neu in 1.2.23 (Gruppe 16) ---
+        // E5: Lese-Endpunkt annehmen. Werk 0; fehlt der Schluessel in einer VORHANDENEN cfg, gilt 1
+        // (Lese-Regel in ap_config_read(), Bestand bis 1.2.22 hatte den Endpunkt immer offen).
+        'endpunkt_ein'     => '0',
+        // V1: Block tts der gemeinsamen Sprachausgabe (ansage_vorgaben('aus'), Stammfassung 1.1.3).
+        'tts_mode'         => 'aus',
+        'tts_ip'           => '',
+        'tts_port'         => '7091',
+        'tts_zones'        => '1',
+        'tts_volume'       => '8',
+        'tts_lang'         => 'de',
+        'tts_template'     => '',
+        'tts_alexa_geraet' => '',
+        'tts_alexa_token'  => '',
+        'tts_alexa_laut'   => '-1',
+        'tts_google_geraet' => '',
+        'tts_google_token' => '',
+        'tts_google_laut'  => '-1',
+        'tts_sonos_zone'   => '',
+        'tts_sonos_laut'   => '-1',
+        'ansage_ausfall'     => '1',
+        'ansage_rueckkehr'   => '1',
+        'ansage_vorwarnung'  => '1',
+        'ansage_abschaltung' => '1',
+        'ansage_sperre'      => '600',
+        // V2: haus/usv/stufe an andere Plugins geben (Regeln/07 Nr. 15), ab Werk aus.
+        'haus_usv_ein'     => '0',
         // Merkmal gegen fremde Absender. Entsteht beim ersten Aufruf der
         // Oberflaeche und ueberlebt jedes Speichern, weil der Handler den
         // Bestand uebernimmt statt die Konfiguration neu zu bauen.
@@ -228,6 +264,7 @@ function ap_config_read()
     if (!is_file($file)) {
         return array($werte, $alt);
     }
+    $gesehen = array();
     foreach (preg_split('/\R/', (string) @file_get_contents($file)) as $zeile) {
         $t = trim($zeile);
         if ($t === '' || $t[0] === ';' || $t[0] === '#' || $t[0] === '[') {
@@ -241,9 +278,17 @@ function ap_config_read()
         $wert = trim(trim(substr($t, $pos + 1)), "\"'");
         if (array_key_exists($klein, $werte)) {
             $werte[$klein] = $wert;
+            $gesehen[$klein] = true;
         } elseif (in_array($klein, array('loglevel', 'sendmail', 'mailto'), true)) {
             $alt = true;
         }
+    }
+    /* E5 (1.2.23), EINE Lese-Regel (dieselbe im Endpunkt webfrontend/html/index.php): fehlt
+     * endpunkt_ein in einer VORHANDENEN Konfiguration, gilt 1 - eine Anlage bis 1.2.22 hatte den
+     * Endpunkt immer offen; postupgrade.sh schreibt die Zeile beim Update ausdruecklich. Keine
+     * Konfiguration: Werk 0. */
+    if (empty($gesehen['endpunkt_ein'])) {
+        $werte['endpunkt_ein'] = '1';
     }
     return array($werte, $alt);
 }
@@ -287,11 +332,16 @@ function ap_config_write($werte)
         @unlink($neben);
         return false;
     }
-    @chmod($neben, 0644);
+    // A4 (1.2.23): 0600 statt 0644 - die Datei traegt formtoken und die Sprechtoken der
+    // Sprachausgabe (Regeln/05, Ultraschall 1.2.6: "drei Stellen gehoeren geprueft").
+    @chmod($neben, 0600);
     if (!@rename($neben, $file)) {
         @unlink($neben);
         return false;
     }
+    // A4 (1.2.23): die Zweitschrift bei JEDEM Speichern mitschreiben. Bis 1.2.22 schrieb sie nur
+    // preupgrade.sh - die Heilung in postinstall.sh spielte dann den Stand des letzten Updates ein.
+    $GLOBALS['ap_zweitschrift_ok'] = ap_zweitschrift_schreiben($txt);
     return true;
 }
 
@@ -331,8 +381,8 @@ function ap_ereignisse($max = 40)
 /** Pfad der PID-Datei, die der Dienst selbst schreibt und sperrt. */
 function ap_pid_datei()
 {
-    return is_dir('/run/shm') ? '/run/shm/apc_ups_ng.pid'
-                              : ap_paths()['logdir'] . '/apc_ups_ng.pid';
+    $n = ap_paths()['plugin'] . '.pid';
+    return is_dir('/run/shm') ? '/run/shm/' . $n : ap_paths()['logdir'] . '/' . $n;
 }
 
 /** Der eigene Dienst mit vollstaendigem Pfad, nicht nur mit Dateinamen. */
@@ -425,7 +475,8 @@ function ap_dienste_suchen()
         return $treffer;
     }
     while (($e = readdir($dh)) !== false) {
-        if (!ctype_digit($e)) {
+        // E3 (1.2.23): preg_match statt ctype_digit (Regeln/03).
+        if (preg_match('/^[0-9]+\z/', $e) !== 1) {
             continue;
         }
         if ($uid >= 0) {
@@ -683,7 +734,8 @@ function ap_gateway_autostart()
  */
 function ap_nie_retained_themen()
 {
-    return array('service/online', 'timestamp', 'valid', 'last_error', 'battery_age_months');
+    return array('service/online', 'timestamp', 'valid', 'last_error', 'battery_age_months',
+                 'status/zaehler', 'status/ok', 'status/ts');
 }
 
 /**
@@ -717,11 +769,12 @@ function ap_themen()
             continue;
         }
         $t[$e['schluessel']] = array(
-            'art'     => isset($e['art']) ? $e['art'] : 'text',
-            'einheit' => isset($e['einheit']) ? (string) $e['einheit'] : '',
-            'min'     => array_key_exists('min', $e) ? $e['min'] : null,
-            'max'     => array_key_exists('max', $e) ? $e['max'] : null,
-            'retain'  => !empty($e['retain']),
+            'art'      => isset($e['art']) ? $e['art'] : 'text',
+            'einheit'  => isset($e['einheit']) ? (string) $e['einheit'] : '',
+            'min'      => array_key_exists('min', $e) ? $e['min'] : null,
+            'max'      => array_key_exists('max', $e) ? $e['max'] : null,
+            'retain'   => !empty($e['retain']),
+            'fehlwert' => (array_key_exists('fehlwert', $e) && $e['fehlwert'] !== null) ? (string) $e['fehlwert'] : null,
         );
     }
     return $t;
@@ -875,40 +928,8 @@ function ap_xml_virtual_in_http($kopf, $cmds)
     return $o;
 }
 
-/**
- * Welche Themen bekommen einen virtuellen Eingang?
- *
- * Textthemen NICHT: das nachgebaute Vorlagenformat ist nur fuer Zahlenwerte
- * belegt, und ein Analogeingang auf einem Text zeigt dauerhaft 0. Bis 1.1.6
- * legte die Vorlage fuer sechs Textthemen genau solche Eingaenge an.
- *
- * Sie gehen deshalb nicht verloren: in Loxone legt man sie von Hand als
- * Virtuellen Texteingang an, Titel = Praefix_Thema (z. B. apcups_status).
- * Bis 1.2.19 stand hier, das MQTT-Gateway lege sie beim ersten Empfang
- * selbst an - das tut es nicht (Entwurf Welle 12 ap, Entscheidung 11).
- * Die Oberflaeche sagt das (LOXONE.VORLAGE_ZAHL, Baustein-Listen).
- */
-function ap_vorlage_themen()
-{
-    $aus = array();
-    foreach (ap_themen() as $k => $info) {
-        if ($info['art'] !== 'text') {
-            $aus[$k] = $info;
-        }
-    }
-    return $aus;
-}
-
-function ap_text_themen()
-{
-    $aus = array();
-    foreach (ap_themen() as $k => $info) {
-        if ($info['art'] === 'text') {
-            $aus[$k] = $info;
-        }
-    }
-    return $aus;
-}
+/* 1.2.23 (E6): ap_vorlage_themen() und ap_text_themen() sind mit der VirtualInHttp-Vorlage des MQTT-Wegs
+ * entfallen - die Bauform je Thema nennt jetzt die Namenstabelle (ap_mqtt_namen()). */
 
 /**
  * Name, unter dem das MQTT-Gateway ein Thema in Loxone fuehrt: Praefix_Thema, jeder Schraegstrich
@@ -937,70 +958,33 @@ function ap_gateway_name($praefix, $thema)
  */
 function ap_vorlage($cfg, $art)
 {
-    $praefix = ap_cfg($cfg, 'themenpraefix', 'apcups');
-    // 1.2.20 (Sprachregel 13.10.2026, Entwurf Welle 12 ap, Entscheidung 10): Titel bleiben fest im
-    // Code - sie werden in Config zu Namen und muessen zu Musterprojekt, Baustein-Liste und
-    // Gateway-Namen passen. Kommentare (Wurzel-Comment, Comment der Befehle) und HintText sind reine
-    // Beschreibung und kommen aus der Sprachdatei. Bis 1.2.19 standen Wurzel-Comment, HintText und
-    // die Kommentare der XML-Vorlage fest deutsch hier.
+    if ($art !== 'xml_in') {
+        return array('', '');
+    }
+    // 1.2.20 (Sprachregel 13.10.2026): Titel fest im Code, Kommentare und HintText aus der Sprachdatei.
     $fuss = sprintf(ap_t('LOXONE.VORLAGE_FUSS'), date('d.m.Y'));
-
-    if ($art === 'xml_in') {
-        // Der alte Weg: Loxone holt die XML-Seite selbst und zieht die Werte
-        // per Befehlserkennung heraus. Bleibt fuer bestehende Anlagen erhalten.
-        $host = gethostname() ? gethostname() : 'loxberry';
-        // Nur Zahlenfelder. STATUS stand hier bis 1.1.6 mit dabei und bekam
-        // einen Eingang mit Analog="true" - ein Zustandstext wie ONLINE
-        // ergibt darin dauerhaft 0. Dieselbe Ueberlegung wie bei den zehn
-        // Textthemen des MQTT-Wegs: das nachgebaute Vorlagenformat ist nur
-        // fuer Zahlenwerte belegt.
-        //
-        // Ersatz fuer den Netzausfall auf diesem Weg: BCHARGE und LINEV
-        // fallen bei einem Ausfall sichtbar ab, und wer den Zustandstext
-        // wirklich braucht, nimmt den MQTT-Weg.
-        // Erstes Element: das MQTT-Thema derselben Groesse - dessen Beschriftung aus [THEMA]
-        // wird der Comment (1.2.20; bis 1.2.19 fest deutsch: Akkuladung, Restlaufzeit,
-        // Netzspannung, Auslastung, Umschaltungen - deutsch ist es dieselbe Beschriftung).
-        $felder = array(
-            'BCHARGE'  => array('battery_charge', '%', 0, 100),
-            'TIMELEFT' => array('time_left', 'min', 0, 9999),
-            'LINEV'    => array('line_voltage', 'V', 0, 300),
-            'LOADPCT'  => array('load_percent', '%', 0, 100),
-            'NUMXFERS' => array('transfers', '', 0, 999999),
-        );
-        $cmds = array();
-        foreach ($felder as $feld => $t) {
-            $cmds[] = array('title' => 'APCUPS_' . $feld, 'comment' => ap_thema_text($t[0]),
-                            'einheit' => $t[1], 'min' => $t[2], 'max' => $t[3],
-                            'check' => '<' . $feld . '>\v');
-        }
-        return array('VI_APC-UPS-NG_XML.xml', ap_xml_virtual_in_http(array(
-            'title'   => 'APC-UPS NG (XML)',
-            'address' => 'http://' . $host . '/plugins/' . ap_paths()['plugin'] . '/index.php',
-            'polling' => '60',
-            'comment' => $fuss,
-            'hint'    => ap_t('LOXONE.VORLAGE_HINWEIS_XML'),
-        ), $cmds));
-    }
-
+    // Der alte Weg: Loxone holt die XML-Seite selbst und zieht die Werte per Befehlserkennung
+    // heraus. Nur Zahlenfelder (ein Zustandstext ergaebe im Analogeingang dauerhaft 0).
+    $felder = array(
+        'BCHARGE'  => array('battery_charge', '%', 0, 100),
+        'TIMELEFT' => array('time_left', 'min', 0, 9999),
+        'LINEV'    => array('line_voltage', 'V', 0, 300),
+        'LOADPCT'  => array('load_percent', '%', 0, 100),
+        'NUMXFERS' => array('transfers', '', 0, 999999),
+    );
     $cmds = array();
-    foreach (ap_vorlage_themen() as $schluessel => $info) {
-        $cmds[] = array(
-            // 1.2.21: Name wie das MQTT-Gateway ihn vergibt - auch im Praefix '/' zu '_'.
-            'title'   => ap_gateway_name($praefix, $schluessel),
-            'comment' => ap_thema_text($schluessel),
-            'einheit' => $info['einheit'],
-            'min'     => $info['min'],
-            'max'     => $info['max'],
-            'check'   => ' ',
-        );
+    foreach ($felder as $feld => $t) {
+        $cmds[] = array('title' => 'APCUPS_' . $feld, 'comment' => ap_thema_text($t[0]),
+                        'einheit' => $t[1], 'min' => $t[2], 'max' => $t[3],
+                        'check' => '<' . $feld . '>\v');
     }
-    return array('VI_APC-UPS-NG_MQTT.xml', ap_xml_virtual_in_http(array(
-        'title'   => 'APC-UPS NG',
-        'address' => 'http://localhost',
-        'polling' => '604800',
+    // A2 (1.2.23): LAN-Adresse und Webserver-Port statt gethostname() ohne Port.
+    return array('VI_APC-UPS-NG_XML.xml', ap_xml_virtual_in_http(array(
+        'title'   => 'APC-UPS NG (XML)',
+        'address' => ap_endpunkt_adresse(),
+        'polling' => '60',
         'comment' => $fuss,
-        'hint'    => ap_t('LOXONE.VORLAGE_HINWEIS_MQTT'),
+        'hint'    => ap_t('LOXONE.VORLAGE_HINWEIS_XML'),
     ), $cmds));
 }
 
@@ -1184,32 +1168,18 @@ function ap_abo_text()
  */
 function ap_sicherung_lesen($roh, $bisher = null)
 {
-    /* Bauart E (Befunde B3/B4 des Durchgangs 29.09.2026): bis 1.2.13 wurde
-     * hier jeder bekannte Schluessel UNGEPRUEFT uebernommen - formtoken als
-     * Liste wurde zur Zeichenfolge "Array", enabled=2 hiess fuer den Dienst
-     * "aus" und fuer den Waechter "an", ein Praefix mit # legte jede
-     * Veroeffentlichung lahm. Und eine nach Hausstandard gebaute eigene
-     * Sicherung (ohne formtoken, mit _-Kopf) wurde abgewiesen.
-     *
-     * Jetzt:
-     *   - jeder Wert laeuft durch ap_wert_pruefen() - DIESELBE Pruefung wie
-     *     beim Speichern im Formular;
-     *   - formtoken wird weder verlangt noch uebernommen: das Merkmal gehoert
-     *     diesem LoxBerry, nicht der Datei;
-     *   - Schluessel mit _ am Anfang sind der lesbare Kopf und werden
-     *     ueberlesen;
-     *   - die Beanstandungen sind Klartext. Maskiert wird EINMAL, bei der
-     *     Ausgabe (bis 1.2.13 hier und dort, also doppelt). */
     $mangel = array();
     $falsch = array();
     $daten = json_decode((string) $roh, true);
     if (!is_array($daten)) {
-        return array(null, array(ap_t('EINST.SICH_KEIN_JSON')), 0, array());
+        return array(null, array(ap_t('EINST.SICH_KEIN_JSON')), 0, array(), array());
     }
     if (!is_array($bisher)) {
         list($bisher, $unbenutzt) = ap_config_read();
     }
-    $pflicht = ap_sicherung_schluessel();
+    $erlaubt = ap_sicherung_schluessel();
+    $pflicht = ap_sicherung_pflicht();
+    $geheim = array('tts_alexa_token', 'tts_google_token');
     $werte = array();
     foreach ($daten as $k => $w) {
         $k = (string) $k;
@@ -1219,7 +1189,14 @@ function ap_sicherung_lesen($roh, $bisher = null)
         if ($k === 'formtoken') {
             continue;
         }
-        if (!in_array($k, $pflicht, true)) {
+        if (in_array($k, $geheim, true)) {
+            if ($w !== '') {
+                $mangel[] = sprintf(ap_t('EINST.SICH_TOKEN'), $k);
+                $falsch[] = $k;
+            }
+            continue;
+        }
+        if (!in_array($k, $erlaubt, true)) {
             $mangel[] = sprintf(ap_t('EINST.SICH_FREMD'), $k);
             $falsch[] = $k;
             continue;
@@ -1229,32 +1206,31 @@ function ap_sicherung_lesen($roh, $bisher = null)
     if (!$werte) {
         $mangel[] = ap_t('EINST.SICH_LEER');
     }
-    /* FEHLENDE Schluessel sind eine Beanstandung, kein stiller Rueckfall.
-     * Gemessen an VolkswagenID 0.9.11 am 03.09.2026: eine Datei mit einem
-     * einzigen Schluessel lief durch, und alle uebrigen Einstellungen fielen
-     * auf Werk zurueck. Der Hausstandard sagt: eine halb gueltige Datei
-     * aendert gar nichts. */
+    /* FEHLENDE Pflichtschluessel sind eine Beanstandung, kein stiller Rueckfall (VolkswagenID
+     * 0.9.11, 03.09.2026). Fehlende wahlfreie (neu in 1.2.23) behalten den jetzigen Stand. */
     $fehlend = array_values(array_diff($pflicht, array_keys($werte)));
     if ($fehlend) {
         $mangel[] = sprintf(ap_t('EINST.SICH_FEHLEND'), count($fehlend), implode(', ', $fehlend));
     }
+    $unveraendert = array_values(array_diff($erlaubt, $pflicht, array_keys($werte)));
     list($gut, $pruef, $pruef_falsch) = ap_werte_pruefen($werte);
     $mangel = array_merge($mangel, $pruef);
     if ($mangel) {
         return array(null, $mangel, count($werte),
-                     array_values(array_unique(array_merge($falsch, $fehlend, $pruef_falsch))));
+                     array_values(array_unique(array_merge($falsch, $fehlend, $pruef_falsch))), array());
     }
     $neu = $bisher;
     foreach ($gut as $k => $v) {
         $neu[$k] = $v;
     }
-    return array($neu, array(), count($gut), array());
+    return array($neu, array(), count($gut), array(), $unveraendert);
 }
 
 /** Die Schluessel einer Sicherung: alle Einstellungen ausser dem Formularmerkmal. */
 function ap_sicherung_schluessel()
 {
-    return array_values(array_diff(array_keys(ap_defaults()), array('formtoken')));
+    return array_values(array_diff(array_keys(ap_defaults()),
+                                   array('formtoken', 'tts_alexa_token', 'tts_google_token')));
 }
 
 /** Die Fassung aus der Plugindatenbank von LoxBerry, '' wenn nicht feststellbar. */
@@ -1351,6 +1327,7 @@ function ap_grenzen()
         'vorwarn_min'     => array(0, 600),
         'vorwarn_prozent' => array(0, 100),
         'log_kb'          => array(32, 20480),
+        'ansage_sperre'   => array(60, 3600),
     );
 }
 
@@ -1371,7 +1348,17 @@ function ap_feld_name($k)
         'vorwarn_prozent'  => 'EINST.VORWARN_PROZENT',
         'rohfelder'        => 'MQTT.ROHFELDER',
         'log_kb'           => 'EINST.LOG_KB',
+        'endpunkt_ein'     => 'LOXONE.ENDPUNKT_EIN',
+        'ansage_ausfall'     => 'EINST.ANSAGE_AUSFALL',
+        'ansage_rueckkehr'   => 'EINST.ANSAGE_RUECKKEHR',
+        'ansage_vorwarnung'  => 'EINST.ANSAGE_VORWARNUNG',
+        'ansage_abschaltung' => 'EINST.ANSAGE_ABSCHALTUNG',
+        'ansage_sperre'      => 'EINST.ANSAGE_SPERRE',
+        'haus_usv_ein'     => 'EINST.HAUS_USV_EIN',
     );
+    if (strpos((string) $k, 'tts_') === 0) {
+        return ap_t('EINST.ANSAGE_UEBERSCHRIFT') . ' (' . $k . ')';
+    }
     return isset($namen[$k]) ? ap_t($namen[$k]) . ' (' . $k . ')' : $k;
 }
 
@@ -1415,6 +1402,25 @@ function ap_wert_pruefen($k, $v)
     if (is_int($v) && isset($g[$k])) {
         $v = (string) $v;
     }
+    /* V1 (1.2.23): die Schluessel des Blocks tts prueft die Stammfassung (ansage_wert_pruefen) -
+     * dieselbe Pruefung wie das Formular (ansage_formular_lesen) und das Zurueckspielen. */
+    if (strpos((string) $k, 'tts_') === 0 && function_exists('ansage_vorgaben')
+        && array_key_exists(substr((string) $k, 4), ansage_vorgaben('aus'))) {
+        $ts = substr((string) $k, 4);
+        if (is_int($v)) {
+            $v = (string) $v;
+        }
+        if (!is_string($v)) {
+            return array(false, '', sprintf(ap_t('EINST.W_TYP'), $name, gettype($v)));
+        }
+        $tg = '';
+        $tp = ansage_wert_pruefen(array($ts => $v), $tg, ap_ansage_modi());
+        if ($tp === null) {
+            return array(false, '', sprintf(ap_t('EINST.W_ANSAGE'), $name,
+                                            ansage_kennung_text($tg, ap_ansage_k())));
+        }
+        return array(true, (string) $tp[$ts], '');
+    }
     if (!is_string($v)) {
         return array(false, '', sprintf(ap_t('EINST.W_TYP'), $name, gettype($v)));
     }
@@ -1423,6 +1429,12 @@ function ap_wert_pruefen($k, $v)
         case 'mqtt':
         case 'benachrichtigung':
         case 'email':
+        case 'endpunkt_ein':
+        case 'ansage_ausfall':
+        case 'ansage_rueckkehr':
+        case 'ansage_vorwarnung':
+        case 'ansage_abschaltung':
+        case 'haus_usv_ein':
             return ($v === '0' || $v === '1') ? array(true, $v, '')
                 : array(false, '', sprintf(ap_t('EINST.W_SCHALTER'), $name, $v));
         case 'host':
@@ -1457,7 +1469,8 @@ function ap_wert_pruefen($k, $v)
     }
     if (isset($g[$k])) {
         list($min, $max) = $g[$k];
-        if ($v !== '' && strlen($v) <= 9 && ctype_digit($v)
+        // E3 (1.2.23): preg_match statt ctype_digit (Regeln/03).
+        if ($v !== '' && strlen($v) <= 9 && preg_match('/^[0-9]+\z/', $v) === 1
             && (int) $v >= $min && (int) $v <= $max) {
             return array(true, (string) (int) $v, '');
         }
@@ -1640,10 +1653,14 @@ function ap_meldung_abholen()
 function ap_eingaben_felder($formular)
 {
     $felder = array(
-        'settings' => array('enabled', 'intervall', 'aktualisierung', 'host',
+        'settings' => array_merge(array('enabled', 'intervall', 'aktualisierung', 'host',
                             'vorwarn_min', 'vorwarn_prozent', 'log_kb',
-                            'benachrichtigung', 'email', 'email_an'),
+                            'benachrichtigung', 'email', 'email_an', 'haus_usv_ein',
+                            'ansage_ausfall', 'ansage_rueckkehr', 'ansage_vorwarnung',
+                            'ansage_abschaltung', 'ansage_sperre'),
+                            function_exists('ansage_x2_felder') ? ansage_x2_felder(ap_ansage_opt()) : array()),
         'mqtt'     => array('mqtt', 'themenpraefix', 'rohfelder'),
+        'endpunkt' => array('endpunkt_ein'),
     );
     return isset($felder[$formular]) ? $felder[$formular] : array();
 }
@@ -1741,4 +1758,306 @@ function ap_http_abruf($url, $ctx)
         }
     }
     return array($t, $code);
+}
+
+/* ==================================================================
+ * Seit 1.2.23 (Gruppe 16): Zweitschrift, Webport, Endpunkt, Sprachausgabe (V1),
+ * Haus-Thema (V2), Namenstabelle und V2-Hakenliste
+ * ================================================================== */
+
+/** Die Sicherung der Pflichtschluessel: die 13 Einstellungen bis 1.2.22 (N5). */
+function ap_sicherung_pflicht()
+{
+    return array('enabled', 'intervall', 'aktualisierung', 'themenpraefix', 'mqtt', 'benachrichtigung',
+                 'email', 'email_an', 'host', 'vorwarn_min', 'vorwarn_prozent', 'rohfelder', 'log_kb');
+}
+
+/**
+ * A4 (1.2.23): die Zweitschrift <home>/config/plugins/<ordner>.backup.apc_ups_ng.cfg bei jedem
+ * Speichern mitschreiben - nur mit Wurzel (Archivmodus nichts) und nur, wenn der Inhalt einen
+ * vollstaendigen Stand traegt (dieselbe Regel wie apc_cfg_hat_inhalt in den Hakenskripten: Kopf
+ * [apc_ups_ng] und formtoken mit 32 Hexzeichen). Geschrieben ueber GENAU "<ziel>.neu" (den Namen
+ * raeumt uninstall ab), Rechte 0600 vor dem Inhalt, Ruecklesen, rename (Regeln/05, Bauart
+ * sp_zweitschrift_ziehen). Rueckgabe true geschrieben, false gescheitert, null nicht anwendbar.
+ */
+function ap_zweitschrift_schreiben($txt)
+{
+    $p = ap_paths();
+    if ($p['home'] === '') {
+        return null;
+    }
+    if (preg_match('/^\[apc_ups_ng\][ \t]*$/m', $txt) !== 1
+        || preg_match('/^formtoken=[0-9a-fA-F]{32}[ \t]*$/m', $txt) !== 1) {
+        return null;
+    }
+    $ziel = $p['home'] . '/config/plugins/' . $p['plugin'] . '.backup.apc_ups_ng.cfg';
+    $neben = $ziel . '.neu';
+    // Erst fragen, dann loeschen: ein gesetzter Fehlerbehandler saehe die Warnung trotz @ (rendern.py, 06.09.2026).
+    if (is_file($neben)) {
+        @unlink($neben);
+    }
+    $fh = @fopen($neben, 'xb');
+    if ($fh === false) {
+        return false;
+    }
+    @chmod($neben, 0600);
+    $ok = (@fwrite($fh, $txt) === strlen($txt)) && @fflush($fh);
+    $ok = @fclose($fh) && $ok;
+    if ($ok) {
+        $ok = (@file_get_contents($neben) === $txt);
+    }
+    if (!$ok || !@rename($neben, $ziel)) {
+        @unlink($neben);
+        return false;
+    }
+    return true;
+}
+
+/** A2 (1.2.23): der Webserver-Port des LoxBerry (general.json Webserver.Port, Rueckfall 80) - ueber
+ *  ansage_webport() der Stammfassung (die Oberflaeche laedt sie wegen V1 ohnehin). */
+function ap_webport()
+{
+    $home = ap_paths()['home'];
+    if ($home === '' || !is_file($home . '/config/system/general.json')) {
+        return 80;
+    }
+    if (function_exists('ansage_webport')) {
+        return (int) ansage_webport($home . '/config/system/general.json', true);
+    }
+    $j = @json_decode((string) @file_get_contents($home . '/config/system/general.json'), true);
+    foreach (array('Webserver', 'WEBSERVER', 'webserver') as $a) {
+        if (isset($j[$a]['Port']) && preg_match('/^[0-9]{1,5}\z/', trim((string) $j[$a]['Port']))
+            && (int) $j[$a]['Port'] >= 1 && (int) $j[$a]['Port'] <= 65535) {
+            return (int) $j[$a]['Port'];
+        }
+    }
+    return 80;
+}
+
+/** A2: die LAN-Adresse des LoxBerry (LBSystem::get_localip(), sonst der Rechnername, sonst loxberry). */
+function ap_lan_adresse()
+{
+    if (class_exists('LBSystem', false) && method_exists('LBSystem', 'get_localip')) {
+        $ip = trim((string) @LBSystem::get_localip());
+        if ($ip !== '') {
+            return $ip;
+        }
+    }
+    $h = gethostname();
+    return $h ? $h : 'loxberry';
+}
+
+/** A2: die Adresse des Lese-Endpunkts aus Sicht des Miniservers (":port" nur, wenn nicht 80). */
+function ap_endpunkt_adresse()
+{
+    $port = ap_webport();
+    return 'http://' . ap_lan_adresse() . ($port !== 80 ? ':' . $port : '')
+         . '/plugins/' . ap_paths()['plugin'] . '/index.php';
+}
+
+/** E5: ist der Lese-Endpunkt eingeschaltet? (Lese-Regel in ap_config_read()) */
+function ap_endpunkt_ein($cfg)
+{
+    return ap_roh($cfg, 'endpunkt_ein') === '1';
+}
+
+/* ---------------- V1: Sprachausgabe (Stammfassung sprachausgabe.php 1.1.3) ---------------- */
+
+/** Erlaubte Ausgabearten: alle des Moduls ausser 'audioserver' - der Original-Audioserver hat keine
+ *  HTTP-Schnittstelle (Kopf der Stammfassung); dort sagt Loxone ueber die Benachrichtigungen an. */
+function ap_ansage_modi()
+{
+    return array('aus', 'musicserver', 'ms4h', 'custom', 'alexang', 'cc4lox', 'sonos4lox');
+}
+
+function ap_ansage_opt()
+{
+    return array('modi' => ap_ansage_modi());
+}
+
+/** Der Block tts aus den Schluesseln tts_* der Konfiguration, vervollstaendigt (ab Werk 'aus'). */
+function ap_tts($cfg)
+{
+    $tts = array();
+    if (function_exists('ansage_vorgaben')) {
+        foreach (ansage_vorgaben('aus') as $s => $vorgabe) {
+            $w = isset($cfg['tts_' . $s]) ? (string) $cfg['tts_' . $s] : (string) $vorgabe;
+            $tts[$s] = is_int($vorgabe) && preg_match('/^-?[0-9]{1,6}\z/', $w) ? (int) $w : $w;
+        }
+        list($tts) = ansage_vervollstaendigen($tts, 'aus');
+    }
+    return $tts;
+}
+
+/** Der Block tts zurueck in die Schluessel tts_* (Zeichenketten) fuer ap_config_write(). */
+function ap_tts_cfg($tts)
+{
+    $aus = array();
+    foreach ((array) $tts as $s => $w) {
+        $aus['tts_' . $s] = (string) $w;
+    }
+    return $aus;
+}
+
+/** Der Kontext des Moduls: Webport, https-Port, Wurzel, Kopfzeile, Ordner fuer <art>_letzte.json
+ *  (der Datenordner, wenn er da ist - das Modul legt keine Ordner an), Texte aus [ANSAGE]. */
+function ap_ansage_k()
+{
+    $p = ap_paths();
+    $g = $p['home'] !== '' ? $p['home'] . '/config/system/general.json' : '';
+    return array(
+        'port'     => ap_webport(),
+        'sslport'  => ($g !== '' && function_exists('ansage_sslport')) ? ansage_sslport($g) : 0,
+        'home'     => $p['home'],
+        'kopf'     => array('User-Agent: LoxBerry APC-UPS NG'),
+        'ordner'   => @is_dir($p['data']) ? $p['data'] : '',
+        't'        => function ($s) { return ap_t($s); },
+        'absender' => 'apc_ups_ng',
+    );
+}
+
+/** Der Ansagetext eines Anlasses aus [ANSAGE_TEXT] (de/en ueber den Erzeuger); ohne Werte, wenn
+ *  Ladung oder Restzeit -1 (keine Aussage) sind. */
+function ap_ansage_text($anlass, $ladung = -1, $rest = -1)
+{
+    $ladung = (int) $ladung;
+    $rest = (int) $rest;
+    switch ($anlass) {
+        case 'ausfall':
+            return ($ladung >= 0 && $rest >= 0)
+                ? sprintf(ap_t('ANSAGE_TEXT.AUSFALL'), $ladung, $rest) : ap_t('ANSAGE_TEXT.AUSFALL_OHNE');
+        case 'rueckkehr':
+            return ap_t('ANSAGE_TEXT.RUECKKEHR');
+        case 'vorwarnung':
+            return $rest >= 0 ? sprintf(ap_t('ANSAGE_TEXT.VORWARNUNG'), $rest) : ap_t('ANSAGE_TEXT.VORWARNUNG_OHNE');
+        case 'abschaltung':
+            return ap_t('ANSAGE_TEXT.ABSCHALTUNG');
+    }
+    return '';
+}
+
+/** Die letzte Ansage des Dienstes (data/<ordner>/ansage_dienst.json) oder null. */
+function ap_ansage_dienst()
+{
+    $f = ap_paths()['data'] . '/ansage_dienst.json';
+    if (!is_file($f)) {
+        return null;
+    }
+    $d = @json_decode((string) @file_get_contents($f), true);
+    return (is_array($d) && isset($d['zeit'], $d['anlass'])) ? $d : null;
+}
+
+/* ---------------- V2: haus/usv/stufe ---------------- */
+
+/** Liegt der Merker "haus/usv/stufe gesendet" (config/plugins/<ordner>/haus_usv_gesendet)? */
+function ap_haus_usv_merker()
+{
+    return is_file(dirname(ap_paths()['config']) . '/haus_usv_gesendet');
+}
+
+/* ---------------- Namenstabelle und V2-Hakenliste (Entwurf 2.4) ---------------- */
+
+/** Die 36 Haken der Musterseiten unter Gateway V2, in der Reihenfolge der Seiten; true = Noncached. */
+function ap_v2_haken()
+{
+    return array(
+        'status/zaehler' => false, 'status/ok' => true, 'service/online' => true, 'on_battery' => false,
+        'alarm_level' => false, 'data_valid' => false, 'replace_battery' => false, 'time_left' => false,
+        'battery_charge' => false, 'time_on_battery' => false, 'shutdown_pending' => false,
+        'status' => false, 'event' => false, 'last_error' => false,
+        'load_percent' => false, 'load_watt' => false, 'nominal_power' => false, 'line_voltage' => false,
+        'output_voltage' => false, 'line_frequency' => false, 'battery_voltage' => false,
+        'nominal_battery_volt' => false, 'internal_temp' => false, 'battery_age_months' => false,
+        'transfers' => false, 'cumulative_on_battery' => false, 'shutdown_charge' => false,
+        'shutdown_minutes' => false, 'shutdown_timeout' => false, 'on_line' => false, 'model' => false,
+        'serial' => false, 'battery_date' => false, 'self_test_result' => false,
+        'self_test_interval' => false, 'last_transfer' => false,
+    );
+}
+
+/** Wo das Thema im Musterprojekt steht: Seite 1 "APC-UPS NG", Seite 2 "... Akku und Netz". */
+function ap_musterprojekt_stellen()
+{
+    return array(
+        'on_battery' => '1 #1', 'alarm_level' => '1 #2', 'data_valid' => '1 #3',
+        'replace_battery' => '1 #4, 2 #12', 'time_left' => '1 #5', 'status/zaehler' => '1 #6',
+        'service/online' => '1 #7', 'battery_charge' => '1 #16, 2 #1', 'status/ok' => '1 #17',
+        'time_on_battery' => '1 #26', 'shutdown_pending' => '1 #31', 'status' => '1 #33',
+        'event' => '1 #34', 'last_error' => '1 #35', 'load_percent' => '2 #2', 'load_watt' => '2 #3',
+        'nominal_power' => '2 #4', 'line_voltage' => '2 #5', 'output_voltage' => '2 #6',
+        'line_frequency' => '2 #7', 'battery_voltage' => '2 #8', 'nominal_battery_volt' => '2 #9',
+        'internal_temp' => '2 #10', 'battery_age_months' => '2 #11', 'transfers' => '2 #13',
+        'cumulative_on_battery' => '2 #14', 'shutdown_charge' => '2 #15', 'shutdown_minutes' => '2 #16',
+        'shutdown_timeout' => '2 #17', 'on_line' => '2 #18', 'model' => '2 #19', 'serial' => '2 #20',
+        'battery_date' => '2 #21', 'self_test_result' => '2 #22', 'self_test_interval' => '2 #23',
+        'last_transfer' => '2 #24',
+    );
+}
+
+/**
+ * Die Namenstabelle: je Thema aus apc_themen.json der Name, unter dem das MQTT-Gateway es in Loxone
+ * fuehrt (ap_gateway_name(), EINE Stelle), die Bauform (Virtueller Eingang / Virtueller
+ * Texteingang), Einheit, Bereich (mit Fehlwert), retained, V2 ('' / 'H' Haken / 'N' Haken und
+ * Noncached), Fehlwert, Stelle im Musterprojekt, Bedeutung und der Vermerk "Bestand".
+ */
+function ap_mqtt_namen($cfg)
+{
+    $praefix = ap_praefix($cfg);
+    $haken = ap_v2_haken();
+    $stellen = ap_musterprojekt_stellen();
+    $aus = array();
+    foreach (ap_themen() as $k => $info) {
+        $aus[] = array(
+            'thema'    => $k,
+            'name'     => ap_gateway_name($praefix, $k),
+            'text'     => $info['art'] === 'text',
+            'einheit'  => $info['einheit'],
+            'min'      => $info['min'],
+            'max'      => $info['max'],
+            'retain'   => $info['retain'],
+            'v2'       => isset($haken[$k]) ? ($haken[$k] ? 'N' : 'H') : '',
+            'fehlwert' => $info['fehlwert'],
+            'stelle'   => isset($stellen[$k]) ? $stellen[$k] : '',
+            'bestand'  => in_array($k, array('timestamp', 'valid'), true),
+        );
+    }
+    return $aus;
+}
+
+/**
+ * Pruefzeile Namenstabelle: jeder Name entsteht aus einem Thema der Liste nach der Regel des
+ * Gateways, jeder V2-Haken und jede Stelle im Musterprojekt gehoert zu einem gesendeten Thema, die
+ * Namen sind eindeutig. Rueckgabe: array(ok, Zahl der Namen, Haken, Noncached, Abweichungen[]).
+ */
+function ap_namen_probe($cfg)
+{
+    $zeilen = ap_mqtt_namen($cfg);
+    $themen = ap_themen();
+    $praefix = ap_praefix($cfg);
+    $abw = array();
+    $namen = array();
+    foreach ($zeilen as $z) {
+        if (!isset($themen[$z['thema']]) || $z['name'] !== str_replace(array('/', '%'), '_', $praefix . '_' . $z['thema'])) {
+            $abw[] = $z['name'];
+        }
+        $namen[] = $z['name'];
+    }
+    if (count(array_unique($namen)) !== count($namen)) {
+        $abw[] = 'doppelt';
+    }
+    $nc = 0;
+    foreach (ap_v2_haken() as $k => $n) {
+        if (!isset($themen[$k])) {
+            $abw[] = $k;
+        }
+        if ($n) {
+            $nc++;
+        }
+    }
+    foreach (ap_musterprojekt_stellen() as $k => $s) {
+        if (!isset($themen[$k])) {
+            $abw[] = $k;
+        }
+    }
+    return array((!$abw && $zeilen) ? true : false, count($zeilen), count(ap_v2_haken()), $nc, array_values(array_unique($abw)));
 }

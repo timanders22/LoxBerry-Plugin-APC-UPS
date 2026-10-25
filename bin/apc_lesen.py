@@ -37,13 +37,35 @@ def themenbericht():
     """
     liste = gem.themen_schluessel()
     erzeugt = sorted(set(gem.messwerte({}, {})) | set(gem.DIENST_THEMEN))
+    # Seit 1.2.23 (A10) auch der Fehlwert: jedes Thema aus messwerte() braucht
+    # einen (Hausregel 18.10.2026 "nie nichts"), eine Dienstaussage keinen, und
+    # ein Zahlenfehlwert muss im Bereich min..max liegen (sonst schnitte Loxone
+    # ihn ab).
+    mess = set(gem.messwerte({}, {}))
+    fw_fehlt, fw_falsch = [], []
+    for t in gem.themen():
+        s = t["schluessel"]
+        fw = gem.fehlwert(s)
+        if s in mess and fw is None:
+            fw_fehlt.append(s)
+        elif s not in mess and fw is not None:
+            fw_falsch.append(s)
+        elif fw is not None and t.get("art") != "text":
+            try:
+                ok = float(t.get("min")) <= float(fw) <= float(t.get("max"))
+            except (TypeError, ValueError):
+                ok = False
+            if not ok:
+                fw_falsch.append(s)
     return {
         "datei":    gem.themen_datei(),
         "liste":    liste,
         "erzeugt":  erzeugt,
         "nur_liste": sorted(set(liste) - set(erzeugt)),
         "nur_code":  sorted(set(erzeugt) - set(liste)),
-        "gleich":   sorted(set(liste)) == erzeugt,
+        "fehlwert_fehlt": sorted(fw_fehlt),
+        "fehlwert_falsch": sorted(fw_falsch),
+        "gleich":   sorted(set(liste)) == erzeugt and not fw_fehlt and not fw_falsch,
     }
 
 
@@ -82,7 +104,28 @@ def mqtt_leeren():
     rc = 0
     for praefix in praefixe:
         rc = max(rc, _leeren_unter(praefix))
+    # V2 (1.2.23): haus/usv/stufe NUR, wenn dieser Ordner es gesendet hat (Merker).
+    rc = max(rc, _haus_usv_leeren())
     return rc
+
+
+def _haus_usv_leeren():
+    """haus/usv/stufe abraeumen, wenn der Merker gem.HAUS_USV_MERKER liegt. Nur genau
+    dieses Thema; ein fremdes haus/... bleibt stehen. Ohne Merker: nichts."""
+    if not gem.haus_usv_merker_da():
+        print("<INFO> MQTT: haus/usv/stufe wurde von diesem Plugin nie gesendet - nichts abzuraeumen.")
+        return 0
+    erg = gem.haus_usv_leeren()
+    if erg["rc"] == 2:
+        print("<WARNING> MQTT: haus/usv/stufe wurde nicht geleert - {0}. Von Hand: "
+              "mosquitto_pub -r -n -t haus/usv/stufe".format(erg["grund"]))
+        return 2
+    if erg["rc"] == 1:
+        print("<WARNING> MQTT: haus/usv/stufe steht nach dem Loeschen noch im Broker.")
+        return 1
+    print("<OK> MQTT: haus/usv/stufe {0} (fremde haus/... unberuehrt).".format(
+        "geloescht und nachgelesen" if erg["geleert"] else "lag nicht mehr im Broker"))
+    return 0
 
 
 def _leeren_unter(praefix):

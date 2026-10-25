@@ -1,7 +1,8 @@
 #!/bin/sh
 
 # To use important variables from command line use the following code:
-PDIR=$3       # Third argument is Plugin installation folder
+# A6 (1.2.23): mit Vorgabe wie APC_PDIR unten.
+PDIR="${3:-apc_ups_ng}"       # Third argument is Plugin installation folder
 
 # ---------- Die Wurzel: gelesen, nicht geraten ----------
 # Bis 1.2.12 war sie das fuenfte Argument oder LBHOMEDIR, ohne Pruefung. Fehlten beide,
@@ -49,8 +50,8 @@ LBPLOG="${LBPLOG:-$APC_BASE/log/plugins}"
 # Rueckfall zeigte $LBPDATA ins Nichts und der Pfad auf /<ordner>.
 LBPDATA="${LBPDATA:-$APC_BASE/data/plugins}"
 
-PLOG=$LBPLOG/$PDIR
-PCONFIG=$LBPCONFIG/$PDIR
+PLOG="$LBPLOG/$PDIR"
+PCONFIG="$LBPCONFIG/$PDIR"
 
 # ---------- Marke "Aktualisierung laeuft" - als Erstes ----------
 # Der Installer legt die Cron-Datei rund eine Minute VOR postinstall.sh neu
@@ -135,8 +136,8 @@ APC_DIENST="$APC_BASE/bin/plugins/$APC_PDIR/apc_service.py"
 # Die Sicherung liegt NEBEN dem Ordner, nicht darin. Gemessen an
 # sbin/plugininstall.pl (Zweig master, 23.08.2026): der Installer ruft
 # &purge_installation nicht nur beim Deinstallieren, sondern auch im
-# Upgrade-Zweig (:886), und deren Rumpf loescht ohne jede Bedingung
-# (:1629 ff.) config/plugins/<x>/, bin/plugins/<x>/, data/plugins/<x>/,
+# Upgrade-Zweig (`&purge_installation;`, master bc59d76 :901), und deren Rumpf
+# (purge_installation, :1648-1653) loescht ohne jede Bedingung config/plugins/<x>/, bin/plugins/<x>/, data/plugins/<x>/,
 # templates/plugins/<x>/ und beide webfrontend/-Ordner. Eine Sicherung IN
 # data/plugins/<x>/ wird also von genau dem Schritt vernichtet, den sie
 # ueberdauern soll. Der Punkt im Namen ist der ganze Unterschied:
@@ -282,8 +283,9 @@ fi
 # (Pruefung-APC-UPS-1.2.10, Fall fremd_pid): ein Prozess
 # "python3 -c ... <Dienstpfad>" mit seiner Nummer in der PID-Datei war nach
 # preupgrade.sh tot.
-PIDF=/run/shm/apc_ups_ng.pid
-[ -f "$PIDF" ] || PIDF="$PLOG/apc_ups_ng.pid"
+# A14 (1.2.23): Name aus dem Ordner (fuer apc_ups_ng byte-gleich).
+PIDF="/run/shm/$APC_PDIR.pid"
+[ -f "$PIDF" ] || PIDF="$PLOG/$APC_PDIR.pid"
 if [ -f "$PIDF" ]; then
     P=$(cat "$PIDF" 2>/dev/null)
     if [ -n "$P" ] && kill -0 "$P" 2>/dev/null && apc_ist_dienst "$P" "$APC_DIENST"; then
@@ -324,7 +326,8 @@ WAISEN=$(apc_dienste_beenden "$APC_DIENST" "$APC_UID")
 # ==== NETZ-EINSTELLUNGEN-UPDATE (automatisch eingefuegt, nicht doppeln) ====
 # Zweitschrift NEBEN den Konfigurationsordner, zusaetzlich zur bisherigen
 # Sicherung. Grund: der Installer kopiert config/* aus dem Archiv ueber
-# config/plugins/<ordner> (plugininstall.pl Zeile 899, cp -r ohne -n) und
+# config/plugins/<ordner> (plugininstall.pl `cp -r -v $tempfolder/config/*`,
+# master bc59d76 :939, ohne -n) und
 # ueberschreibt dabei die Datei des Nutzers. Bisher haing die Rettung allein
 # an postupgrade.sh. Laeuft das aus irgendeinem Grund nicht durch, greift
 # jetzt postinstall.sh auf diese Zweitschrift zu - sie liegt ausserhalb des
@@ -356,7 +359,8 @@ if apc_cfg_hat_inhalt "$NETZ_CFG/apc_ups_ng.cfg"; then
         fi
     fi
 elif [ -f "$NETZ_ZWEIT" ]; then
-    # Die Zweitschrift schreibt JEDES Speichern der Oberflaeche neu - sie ist die
+    # Die Zweitschrift schreibt JEDES Speichern der Oberflaeche neu (seit 1.2.23,
+    # A4: ap_zweitschrift_schreiben()) - sie ist die
     # laufende Rueckfallkopie, kein Rest eines frueheren Vorgangs. preupgrade.sh
     # laeuft nur bei einem Update, die Marke liegt also vor: Entscheidung 1
     # erlaubt das Zurueckspielen, und genau das heilt eine kaputte Konfiguration.

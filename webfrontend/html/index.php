@@ -122,7 +122,10 @@ function apc_ordner()
 function apc_konfig()
 {
     // intervall seit 1.2.14 (C5): fuer OK im Block CALC.
-    $aus = array('host' => '', 'intervall' => '30');
+    // endpunkt_ein seit 1.2.23 (E5): Werk 0 (keine Konfiguration); fehlt der Schluessel in
+    // einer VORHANDENEN Konfiguration, gilt 1 - dieselbe Lese-Regel wie ap_config_read().
+    $aus = array('host' => '', 'intervall' => '30', 'endpunkt_ein' => '0');
+    $gesehen = false;
     $home = apc_wurzel();
     $ordner = apc_ordner();
     $kandidaten = array();
@@ -143,9 +146,15 @@ function apc_konfig()
                 continue;
             }
             $k = strtolower(trim(substr($t, 0, $pos)));
-            if ($k === 'host' || $k === 'intervall') {
+            if ($k === 'host' || $k === 'intervall' || $k === 'endpunkt_ein') {
                 $aus[$k] = trim(trim(substr($t, $pos + 1)), "\"'");
+                if ($k === 'endpunkt_ein') {
+                    $gesehen = true;
+                }
             }
+        }
+        if (!$gesehen) {
+            $aus['endpunkt_ein'] = '1';
         }
         break;
     }
@@ -155,8 +164,14 @@ function apc_konfig()
 /** Die Zustandsdatei des Dienstes - dort stehen die abgeleiteten Werte. */
 function apc_zustand()
 {
-    $f = is_dir('/run/shm') ? '/run/shm/apc_ups_ng_status.json'
-                            : '/tmp/apc_ups_ng_status.json';
+    // A14 (1.2.23): der Name traegt den Ordner (fuer apc_ups_ng byte-gleich wie bisher); ohne
+    // Pluginordner (Archiv) gibt es keinen Zustand.
+    $ordner = apc_ordner();
+    if ($ordner === '') {
+        return null;
+    }
+    $f = is_dir('/run/shm') ? '/run/shm/' . $ordner . '_status.json'
+                            : '/tmp/' . $ordner . '_status.json';
     if (!is_file($f)) {
         return null;
     }
@@ -185,11 +200,36 @@ function apc_x($s)
     return htmlspecialchars((string) $s, ENT_QUOTES | ENT_XML1, 'UTF-8');
 }
 
+/* ================== Schalter endpunkt_ein (seit 1.2.23, E5) ==================
+ *
+ * Der Endpunkt liefert alle apcaccess-Felder (auch Seriennummer und Modell) an
+ * jeden im LAN. Seit 1.2.23 steht er GANZ hinter dem Schalter endpunkt_ein
+ * (Reiter Einbindung in Loxone): Neuinstallation aus, ein Update laesst ihn
+ * bei bestehenden Anlagen an (Lese-Regel in apc_konfig(), postupgrade.sh
+ * schreibt endpunkt_ein=1). Aus: HTTP 403, kein apcaccess-Aufruf, keine
+ * Zustandsdatei; der Selbsttest antwortet SELFTEST;OK=0;ERR=ENDPUNKT_AUS.
+ * Ein Merkwort gibt es bewusst nicht (F-E7): der Endpunkt loest nichts aus.
+ */
+$cfg = apc_konfig();
+if ($cfg['endpunkt_ein'] !== '1') {
+    http_response_code(403);
+    if (isset($_GET['selftest'])) {
+        header('Content-Type: text/plain; charset=UTF-8');
+        echo "SELFTEST;OK=0;ERR=ENDPUNKT_AUS\n";
+        exit;
+    }
+    header('Content-Type: text/xml; charset=UTF-8');
+    echo "<?xml version='1.0' encoding='UTF-8'?>\n<root>\n <error>Endpunkt ausgeschaltet</error>\n"
+        . " <errorinfo>Im Plugin Reiter Einbindung in Loxone „HTTP-Endpunkt für Loxone annehmen“ setzen</errorinfo>\n"
+        . " <status>ERROR</status>\n</root>\n";
+    exit;
+}
+
 /* ================== Selbsttest ==================
  *
  * Beantwortet genau eine Frage: antwortet diese Adresse noch? Kein
  * Geraetekontakt, kein Schreibzugriff, kein Aufruf von apcaccess - sonst
- * wuerde die Pruefung selbst zum Eingriff.
+ * wuerde die Pruefung selbst zum Eingriff. Seit 1.2.23 hinter dem Schalter.
  */
 if (isset($_GET['selftest'])) {
     header('Content-Type: text/plain; charset=UTF-8');
@@ -218,7 +258,6 @@ if ($prog === '') {
 // oder Adresse, notfalls mit Port - was nicht passt, wird NICHT
 // durchgereicht, sondern weggelassen, und dann fragt apcaccess wie bisher
 // die oertliche USV.
-$cfg = apc_konfig();
 $befehl = escapeshellarg($prog) . ' status';
 if ($cfg['host'] !== '' && preg_match('/^[A-Za-z0-9._-]+(:[0-9]{1,5})?$/', $cfg['host'])) {
     $befehl .= ' ' . escapeshellarg($cfg['host']);
@@ -280,7 +319,8 @@ if (is_array($z) && !empty($z['werte']) && is_array($z['werte'])) {
      * weil eine Befehlserkennung <X>\v ein Attribut schlecht greift; das
      * Attribut alter bleibt. Der Takt wie im Reiter Test: mindestens 5 s,
      * unlesbar = Vorgabe 30 s. */
-    $takt = ctype_digit((string) $cfg['intervall']) ? max(5, (int) $cfg['intervall']) : 30;
+    // E3 (1.2.23): preg_match statt ctype_digit (Regeln/03 - ctype ist nicht garantiert).
+    $takt = preg_match('/^[0-9]+\z/', (string) $cfg['intervall']) === 1 ? max(5, (int) $cfg['intervall']) : 30;
     echo "   <OK>" . ($alter <= 3 * $takt ? 1 : 0) . "</OK>\n";
     echo "   <ALTER>" . (int) $alter . "</ALTER>\n";
     foreach ($z['werte'] as $k => $v) {

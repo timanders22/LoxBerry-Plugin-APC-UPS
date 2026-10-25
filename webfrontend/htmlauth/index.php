@@ -196,10 +196,18 @@ if ($ap_ist_post) {
 /* ============ Loxone-Vorlage herunterladen ============ */
 if ($ap_ist_post && isset($_POST['download'])) {
     $art = (string) $_POST['download'];
-    if ($art !== 'mqtt_in' && $art !== 'xml_in') {
-        $art = 'mqtt_in';
+    if ($art !== 'xml_in') {
+        /* E6 (1.2.23): die VirtualInHttp-Vorlage des MQTT-Wegs gibt es nicht mehr - statt still die
+         * XML-Vorlage zu liefern, sagt die Seite es und verweist auf die Namenstabelle. */
+        $ap_fehler[] = ap_t('LOXONE.VORLAGE_ENTFALLEN');
+        $tab = 'tab-loxone';
     }
-    list($name, $inhalt) = ap_vorlage($ap_cfg, $art);
+}
+if ($ap_ist_post && isset($_POST['download']) && (string) $_POST['download'] === 'xml_in') {
+    list($name, $inhalt) = ap_vorlage($ap_cfg, 'xml_in');
+    /* A1 (1.2.23): eine Warnung im Ausgabepuffer stuende sonst am Anfang der Datei, und
+     * Content-Length schnitte sie ab. display_errors bleibt (keine Hausregel, Entscheidung 1). */
+    while (ob_get_level() > 0) { ob_end_clean(); }
     header('Content-Type: application/x-download');
     // Die Anfuehrungszeichen um den Dateinamen sind Pflicht: ohne sie
     // bricht jeder Name, der ein Leerzeichen enthaelt.
@@ -239,6 +247,38 @@ if ($ap_ist_post && isset($_POST['test'])) {
     $tab = 'tab-test';
 }
 
+/* ============ Testansage (V1, seit 1.2.23) ============
+ * Spricht den Testtext des Moduls ueber die gespeicherte Ausgabeart; Rueckmeldung ohne Text und
+ * Token (ansage_kennung_text). Orange (Regeln/04: Testansagen loesen etwas aus). */
+if ($ap_ist_post && isset($_POST['ansage_test'])) {
+    $ap_ak = ap_ansage_k();
+    $ap_ar = ansage_testansage(ap_tts($ap_cfg), $ap_ak);
+    if ($ap_ar['stand'] === 1) {
+        $ap_hinweise[] = ap_t('EINST.ANSAGE_TEST_OK');
+    } elseif ($ap_ar['stand'] === -1) {
+        $ap_hinweise[] = sprintf(ap_t('EINST.ANSAGE_TEST_NICHTS'), ansage_kennung_text($ap_ar['kennung'], $ap_ak));
+    } else {
+        $ap_fehler[] = sprintf(ap_t('EINST.ANSAGE_TEST_FEHL'), ansage_kennung_text($ap_ar['kennung'], $ap_ak));
+    }
+}
+
+/* ============ Speichern: HTTP-Endpunkt (E5, seit 1.2.23) ============ */
+if ($ap_ist_post && isset($_POST['save_endpunkt'])) {
+    $eingabe = array('endpunkt_ein' => isset($_POST['endpunkt_ein']) ? '1' : '0');
+    list($ap_gut, $ap_mangel, $ap_falsch) = ap_werte_pruefen($eingabe);
+    if ($ap_mangel) {
+        $ap_fehler[] = ap_t('EINST.NICHT_GESPEICHERT');
+        $ap_fehler = array_merge($ap_fehler, $ap_mangel);
+        $ap_eingaben = ap_eingaben_merken('endpunkt', $eingabe, $ap_falsch);
+    } elseif (ap_config_write(array_merge($ap_cfg, $ap_gut))) {
+        $ap_saved = true;
+        $ap_hinweise[] = ap_t($ap_gut['endpunkt_ein'] === '1' ? 'LOXONE.ENDPUNKT_AN' : 'LOXONE.ENDPUNKT_AUS');
+        list($ap_cfg, $ap_altformat) = ap_config_read();
+    } else {
+        $ap_fehler[] = ap_t('TEXT.SCHREIBFEHLER') . ' ' . $ap_p['config'];
+    }
+}
+
 /* ============ Speichern: Einstellungen ============ */
 if ($ap_ist_post && isset($_POST['save'])) {
     /* C7 (1.2.14): beanstanden statt zurechtbiegen. Bis 1.2.13 entfernte der
@@ -253,21 +293,41 @@ if ($ap_ist_post && isset($_POST['save'])) {
         'benachrichtigung' => isset($_POST['benachrichtigung']) ? '1' : '0',
         'email'            => isset($_POST['email']) ? '1' : '0',
     );
+    // 1.2.23: Haken haus_usv_ein (V2) und die Anlass-Haken der Sprachausgabe (V1).
+    foreach (array('haus_usv_ein', 'ansage_ausfall', 'ansage_rueckkehr', 'ansage_vorwarnung',
+                   'ansage_abschaltung') as $ap_k) {
+        $eingabe[$ap_k] = isset($_POST[$ap_k]) ? '1' : '0';
+    }
     foreach (array('intervall', 'aktualisierung', 'host', 'vorwarn_min',
-                   'vorwarn_prozent', 'log_kb', 'email_an') as $ap_k) {
+                   'vorwarn_prozent', 'log_kb', 'email_an', 'ansage_sperre') as $ap_k) {
         $ap_v = isset($_POST[$ap_k]) ? $_POST[$ap_k] : '';
         $eingabe[$ap_k] = is_string($ap_v) ? trim($ap_v) : $ap_v;
     }
     list($ap_gut, $ap_mangel, $ap_falsch) = ap_werte_pruefen($eingabe);
+    /* V1 (1.2.23): der Block tts ueber ansage_formular_lesen() der Stammfassung - jede Beanstandung
+     * verhindert das Speichern (Nr. 16); ein leeres Tokenfeld heisst "behalten", kein Token steht in
+     * einer Meldung. */
+    $ap_tm = array();
+    $ap_tb = array();
+    $ap_tts_neu = ansage_formular_lesen($_POST, ap_tts($ap_cfg), $ap_tm, $ap_tb, ap_ansage_opt(), ap_ansage_k());
+    foreach ($ap_tm as $ap_x) { $ap_mangel[] = $ap_x['text']; }
+    foreach ($ap_tb as $ap_x) { $ap_falsch[] = $ap_x; }
     if ($ap_mangel) {
         $ap_fehler[] = ap_t('EINST.NICHT_GESPEICHERT');
         foreach ($ap_mangel as $ap_m) {
             $ap_fehler[] = $ap_m;
         }
-        // X-2: die eingetippten Werte reisen mit der Einmalmeldung zurueck.
-        $ap_eingaben = ap_eingaben_merken('settings', $eingabe, $ap_falsch);
-    } elseif (ap_config_write(array_merge($ap_cfg, $ap_gut))) {
+        // X-2: die eingetippten Werte reisen mit der Einmalmeldung zurueck (ohne Token).
+        $ap_zurueck = $eingabe;
+        foreach (ansage_x2_felder(ap_ansage_opt()) as $ap_k) {
+            if (isset($_POST[$ap_k]) && is_string($_POST[$ap_k])) { $ap_zurueck[$ap_k] = $_POST[$ap_k]; }
+        }
+        $ap_eingaben = ap_eingaben_merken('settings', $ap_zurueck, $ap_falsch);
+    } elseif (ap_config_write(array_merge($ap_cfg, $ap_gut, ap_tts_cfg($ap_tts_neu)))) {
         $ap_saved = true;
+        if (isset($GLOBALS['ap_zweitschrift_ok']) && $GLOBALS['ap_zweitschrift_ok'] === false) {
+            $ap_hinweise[] = ap_t('EINST.ZWEITSCHRIFT_FEHLT');
+        }
         // 'uebernehmen': neu starten, damit die Einstellungen gelten - einen
         // mit "Dienst anhalten" angehaltenen Dienst aber nicht (bis 1.2.12
         // startete jedes Speichern ihn wieder; Pruefung-APC-UPS-1.2.13, S4).
@@ -401,6 +461,8 @@ $ap_frame = class_exists('LBWeb', false);
 if ($ap_ist_post && isset($_POST['ap_sichern'])) {
     $ap_js = ap_sicherung_json($ap_cfg);
     if ($ap_js !== false) {
+        // A1 (1.2.23): Ausgabepuffer leeren, bevor die Datei beginnt.
+        while (ob_get_level() > 0) { ob_end_clean(); }
         header('Content-Type: application/json; charset=utf-8');
         header('Content-Disposition: attachment; filename="apc_einstellungen_'
                . date('Ymd_His') . '.json"');
@@ -430,8 +492,8 @@ if ($ap_ist_post && isset($_POST['ap_zurueck'])) {
     } elseif ((int) @filesize($ap_tmp) > 65536) {
         $ap_fehler[] = ap_t('EINST.SICH_ZU_GROSS');
     } else {
-        list($ap_neu, $ap_mangel, $ap_n) = ap_sicherung_lesen(
-            (string) @file_get_contents($ap_tmp, false, null, 0, 65537), $ap_cfg);
+        list($ap_neu, $ap_mangel, $ap_n, $ap_bean, $ap_unv) = array_pad(ap_sicherung_lesen(
+            (string) @file_get_contents($ap_tmp, false, null, 0, 65537), $ap_cfg), 5, array());
         if ($ap_neu === null) {
             /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
              * nichts. Der Satz traegt Auszeichnung, die Beanstandungen sind
@@ -440,6 +502,10 @@ if ($ap_ist_post && isset($_POST['ap_zurueck'])) {
                               . ap_e(implode(' ', $ap_mangel));
         } elseif (ap_config_write($ap_neu)) {
             $ap_hinweise[] = sprintf(ap_t('EINST.SICH_UEBERNOMMEN'), $ap_n);
+            // N5 (1.2.23): eine Sicherung bis 1.2.22 kennt die neuen Schluessel nicht - sie bleiben.
+            if ($ap_unv) {
+                $ap_hinweise[] = sprintf(ap_t('EINST.SICH_WAHLFREI'), implode(', ', $ap_unv));
+            }
             ap_abo_datei(ap_praefix($ap_neu), true);
             $ap_h = ap_praefix_wechsel_hinweis($ap_cfg, $ap_neu);
             if ($ap_h !== '') {
@@ -792,6 +858,39 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
 <div class="sm-hilfe"><?php echo ap_t('EINST.EMAIL_AN_HILFE'); ?></div>
 </div>
 
+<?php /* V2 (1.2.23, Entwurf 7.2): haus/usv/stufe an andere Plugins - ab Werk aus. */ ?>
+<div class="sm-feld">
+<label><input data-role="none" type="checkbox" name="haus_usv_ein" value="1"<?php
+    echo ap_fwert('settings', 'haus_usv_ein', ap_cfg($ap_cfg, 'haus_usv_ein', '0')) === '1' ? ' checked' : ''; ?>>
+<?php echo ap_e(ap_t('EINST.HAUS_USV_EIN')); ?></label>
+<div class="sm-hilfe"><?php echo ap_t('EINST.HAUS_USV_HILFE'); ?></div>
+</div>
+
+<?php /* V1 (1.2.23, Entwurf 7.1): Sprachausgabe ueber die Stammfassung sprachausgabe.php 1.1.3 - ab Werk
+       aus. Der Formularblock kommt aus dem Modul (ansage_formular_html), Haken und Sperrzeit aus der Linie. */ ?>
+<h2><?php echo ap_e(ap_t('EINST.ANSAGE_UEBERSCHRIFT')); ?></h2>
+<div class="sm-warnung"><?php echo ap_t('EINST.ANSAGE_LAUTSPRECHER'); ?></div>
+<?php echo ansage_formular_html(ap_tts($ap_cfg), array(
+    'w' => function ($n, $g) { return ap_fwert('settings', $n, $g); },
+    'm' => function ($n) { return ap_fmark('settings', $n); },
+    'c' => function ($n, $g) { return ap_fwert('settings', $n, $g ? '1' : '') === '1'; },
+    'modi' => ap_ansage_modi()), ap_ansage_k()); ?>
+<div class="sm-hilfe"><?php echo ap_t('EINST.ANSAGE_AUDIOSERVER'); ?></div>
+<div class="sm-feld">
+<label><?php echo ap_e(ap_t('EINST.ANSAGE_ANLAESSE')); ?></label>
+<?php foreach (array('ansage_ausfall' => 'EINST.ANSAGE_AUSFALL', 'ansage_rueckkehr' => 'EINST.ANSAGE_RUECKKEHR',
+                     'ansage_vorwarnung' => 'EINST.ANSAGE_VORWARNUNG', 'ansage_abschaltung' => 'EINST.ANSAGE_ABSCHALTUNG') as $ap_ak => $ap_at) { ?>
+<label style="display:block;font-weight:normal;"><input data-role="none" type="checkbox" name="<?php echo $ap_ak; ?>" value="1"<?php
+    echo ap_fwert('settings', $ap_ak, ap_cfg($ap_cfg, $ap_ak, '1')) === '1' ? ' checked' : ''; ?>> <?php echo ap_e(ap_t($ap_at)); ?></label>
+<?php } ?>
+<div class="sm-hilfe"><?php echo ap_t('EINST.ANSAGE_ANLAESSE_HILFE'); ?></div>
+</div>
+<div class="sm-feld">
+<label><?php echo ap_e(ap_t('EINST.ANSAGE_SPERRE')); ?></label>
+<input data-role="none"<?php echo ap_fmark('settings', 'ansage_sperre'); ?> type="number" name="ansage_sperre" min="60" max="3600" value="<?php echo ap_e(ap_fwert('settings', 'ansage_sperre', ap_cfg($ap_cfg, 'ansage_sperre', '600'))); ?>">
+<div class="sm-hilfe"><?php echo ap_t('EINST.ANSAGE_SPERRE_HILFE'); ?></div>
+</div>
+
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-lesen"></i> <?php echo ap_e(ap_t('LEGENDE.LESEN')); ?></span>
 <span><i class="sm-punkt sm-b-aktion"></i> <?php echo ap_e(ap_t('LEGENDE.AKTION')); ?></span>
@@ -800,6 +899,16 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
 <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="save" value="1"><?php echo ap_e(ap_t('ALLGEMEIN.SPEICHERN')); ?></button>
 </div>
 <div class="sm-hilfe"><?php echo ap_t('EINST.SPEICHERN_HILFE'); ?></div>
+</form>
+
+<h3><?php echo ap_e(ap_t('EINST.ANSAGE_TEST')); ?></h3>
+<div class="sm-hilfe"><?php echo ap_t('EINST.ANSAGE_TEST_HILFE'); ?></div>
+<form method="post" action="index.php">
+<input data-role="none" type="hidden" name="activetab" value="tab-settings">
+<input data-role="none" type="hidden" name="ap_form" value="<?php echo ap_e($ap_formtoken); ?>">
+<div class="sm-knopfreihe">
+<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ansage_test" value="1"><?php echo ap_e(ap_t('EINST.K_TESTANSAGE')); ?></button>
+</div>
 </form>
 
 <h2><?php echo ap_e(ap_t('EINST.NOTABSCHALTUNG')); ?></h2>
@@ -906,12 +1015,14 @@ $ap_kachel(ap_t('MQTT.PRAEFIX'), ap_e($ap_praefix));
 <th style="width:9%;"><?php echo ap_e(ap_t('MQTT.SP_ART')); ?></th>
 <th style="width:8%;"><?php echo ap_e(ap_t('MQTT.SP_EINHEIT')); ?></th>
 <th style="width:10%;"><?php echo ap_e(ap_t('MQTT.SP_RETAIN')); ?></th>
+<th style="width:8%;"><?php echo ap_e(ap_t('LOXONE.NT_FEHLWERT')); ?></th>
 <th><?php echo ap_e(ap_t('MQTT.SP_BEDEUTUNG')); ?></th></tr>
 <?php foreach ($ap_themen as $k => $info) { ?>
 <tr><td><span class="sm-mono"><?php echo ap_e($ap_praefix . '/' . $k); ?></span></td>
 <td><?php echo ap_e($info['art']); ?></td>
 <td><?php echo ap_e($info['einheit']); ?></td>
 <td><?php echo $info['retain'] ? ap_e(ap_t('ALLGEMEIN.JA')) : ap_e(ap_t('ALLGEMEIN.NEIN')); ?></td>
+<td><?php echo $info['fehlwert'] === null ? '&ndash;' : ap_e($info['fehlwert']); ?></td>
 <td><?php echo ap_e(ap_thema_text($k));
     $lang = ap_thema_lang($k);
     if ($lang !== '') { echo '<div class="sm-hilfe">' . $lang . '</div>'; } ?></td></tr>
@@ -923,6 +1034,10 @@ $ap_kachel(ap_t('MQTT.PRAEFIX'), ap_e($ap_praefix));
 
 <!-- ================= Reiter: Einbindung in Loxone ================= -->
 <div class="sm-seite<?php echo ap_aktiv('tab-loxone'); ?>" id="tab-loxone">
+<div class="sm-legende">
+<span><i class="sm-punkt sm-b-technik"></i> <?php echo ap_e(ap_t('LEGENDE.TECHNIK_HILFSMITTEL')); ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i> <?php echo ap_e(ap_t('LEGENDE.AKTION')); ?></span>
+</div>
 
 <h2><?php echo ap_e(ap_t('LOXONE.SCHRITT1')); ?></h2>
 <div class="sm-step"><?php echo ap_t('LOXONE.SCHRITT1_TEXT'); ?></div>
@@ -932,34 +1047,66 @@ $ap_kachel(ap_t('MQTT.PRAEFIX'), ap_e($ap_praefix));
 <p><?php echo ap_t('LOXONE.SCHRITT2_TEXT'); ?></p>
 <p class="sm-pre"><?php echo ap_e($ap_praefix); ?>/#</p>
 <p><b><?php echo ap_abo_text(); ?></b></p>
+<?php /* 1.2.23 (Entwurf 2.4, F-E8): unter Gateway V2 die 36 Haken der Musterseiten, zwei davon mit
+       "Noncached"; Fassung unbekannt -> Abo-Satz UND Haken (Regeln/07). */
+if (ap_gateway_fassung() !== 1) { ?>
+<p><?php echo ap_e(sprintf(ap_t('LOXONE.V2_HAKEN_TEXT'), count(ap_v2_haken()))); ?></p>
+<p class="sm-pre"><?php
+    foreach (ap_v2_haken() as $ap_hk => $ap_nc) {
+        echo ap_e($ap_praefix . '/' . $ap_hk) . ($ap_nc ? ' &mdash; ' . ap_e(ap_t('LOXONE.V2_NONCACHED')) : '') . "\n";
+    } ?></p>
+<p class="sm-hilfe"><?php echo ap_t('LOXONE.V2_HAUS_HINWEIS'); ?></p>
+<?php } ?>
 </div>
 
 <h2><?php echo ap_e(ap_t('LOXONE.SCHRITT3')); ?></h2>
 <div class="sm-step">
 <p><?php echo ap_t('LOXONE.SCHRITT3_TEXT'); ?></p>
-<div class="sm-legende">
-<span><i class="sm-punkt sm-b-technik"></i> <?php echo ap_e(ap_t('LEGENDE.TECHNIK_DATEI')); ?></span>
+<?php /* 1.2.23 (E6, Entwurf 2.4/2.5): Namenstabelle statt VirtualInHttp-Vorlage. Je Thema der Name, den
+       das MQTT-Gateway vergibt (ap_gateway_name(), EINE Stelle), Bauform, Bereich mit Fehlwert, retained,
+       Haken unter Gateway V2 und die Stelle im Musterprojekt. */
+$ap_nt = ap_mqtt_namen($ap_cfg); ?>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?php echo ap_e(ap_t('LOXONE.NT_NAME')); ?></th><th><?php echo ap_e(ap_t('LOXONE.NT_BAUFORM')); ?></th>
+<th><?php echo ap_e(ap_t('LOXONE.NT_BEREICH')); ?></th><th><?php echo ap_e(ap_t('LOXONE.NT_FEHLWERT')); ?></th>
+<th><?php echo ap_e(ap_t('MQTT.SP_RETAIN')); ?></th><th><?php echo ap_e(ap_t('LOXONE.NT_V2')); ?></th>
+<th><?php echo ap_e(ap_t('LOXONE.NT_MUSTER')); ?></th><th><?php echo ap_e(ap_t('MQTT.SP_BEDEUTUNG')); ?></th></tr>
+<?php foreach ($ap_nt as $ap_z) { ?>
+<tr><td><span class="sm-mono"><?php echo ap_e($ap_z['name']); ?></span></td>
+<td><?php echo ap_e(ap_t($ap_z['text'] ? 'LOXONE.T_TEXTEIN' : 'LOXONE.NT_VI')); ?></td>
+<td><?php echo $ap_z['text'] ? '&mdash;' : ap_e($ap_z['min'] . ' … ' . $ap_z['max'] . ($ap_z['einheit'] !== '' ? ' ' . $ap_z['einheit'] : '')); ?></td>
+<td><?php echo $ap_z['fehlwert'] === null ? '&mdash;' : '<span class="sm-mono">' . ap_e($ap_z['fehlwert']) . '</span>'; ?></td>
+<td><?php echo ap_e(ap_t($ap_z['retain'] ? 'ALLGEMEIN.JA' : 'ALLGEMEIN.NEIN')); ?></td>
+<td><?php echo $ap_z['v2'] === '' ? '&mdash;' : ap_e(ap_t($ap_z['v2'] === 'N' ? 'LOXONE.NT_HAKEN_NC' : 'LOXONE.NT_HAKEN')); ?></td>
+<td><?php echo $ap_z['stelle'] === '' ? '&mdash;' : ap_e($ap_z['stelle']); ?></td>
+<td><?php echo ap_e(ap_thema_text($ap_z['thema']));
+    if ($ap_z['bestand']) { echo '<div class="sm-hilfe">' . ap_e(ap_t('LOXONE.NT_BESTAND')) . '</div>'; } ?></td></tr>
+<?php } ?>
+</table>
 </div>
-<form method="post" action="index.php">
-<input data-role="none" type="hidden" name="activetab" value="tab-loxone">
-<input data-role="none" type="hidden" name="ap_form" value="<?php echo ap_e($ap_formtoken); ?>">
 <div class="sm-knopfreihe">
-<button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="mqtt_in"><?php echo ap_e(ap_t('LOXONE.KNOPF_MQTT')); ?></button>
-<button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="xml_in"><?php echo ap_e(ap_t('LOXONE.KNOPF_XML')); ?></button>
+<button data-role="none" class="sm-btn sm-b-technik" type="button" onclick="apNamenKopieren()"><?php echo ap_e(ap_t('LOXONE.K_NAMEN_KOPIEREN')); ?></button>
 </div>
-</form>
-<?php /* 1.2.20 (Entwurf Welle 12 ap, Entscheidung 11): Textthemen legt das Gateway nicht selbst an -
-       der Satz nennt den Namen, unter dem man sie von Hand anlegt (Beispiel status). */ ?>
-<p class="sm-hilfe"><?php echo ap_e(sprintf(ap_t('LOXONE.VORLAGE_ZAHL'),
-    count(ap_vorlage_themen()), count(ap_text_themen()), ap_gateway_name($ap_praefix, 'status'))); ?></p>
-<?php /* 1.2.21 (Hausherr 14.10.2026): Ein Praefix mit Ebenen (haus/apcups) heisst in Loxone mit
-       Unterstrich - so benennt das MQTT-Gateway die Eingaenge, und so heissen sie in der Vorlage und in
-       den Baustein-Listen (ap_gateway_name()). Beim Vorgabe-Praefix erscheint der Hinweis nicht. */ ?>
+<textarea data-role="none" id="ap-namen" readonly rows="3" style="width:100%;max-width:640px;font-family:Consolas,monospace;font-size:0.85em;"><?php
+    $ap_nl = array();
+    foreach ($ap_nt as $ap_z) { if ($ap_z['stelle'] !== '') { $ap_nl[] = $ap_z['name']; } }
+    echo ap_e(implode("\n", $ap_nl)); ?></textarea>
+<p class="sm-hilfe"><?php echo ap_t('LOXONE.NAMEN_HINWEIS'); ?></p>
+<?php /* 1.2.21 (Hausherr 14.10.2026): Ein Praefix mit Ebenen (haus/apcups) heisst in Loxone mit Unterstrich. */ ?>
 <?php if (strpos((string) $ap_praefix, '/') !== false) { ?>
 <div class="sm-hinweis"><?php echo ap_e(sprintf(ap_t('LOXONE.PRAEFIX_SCHRAEG'), $ap_praefix,
     ap_gateway_name($ap_praefix, 'status'), $ap_praefix . '_status')); ?></div>
 <?php } ?>
-<p><b><?php echo ap_e(ap_t('LOXONE.IMPORT_DOPPELT')); ?></b></p>
+<script>
+function apNamenKopieren() {
+    var t = document.getElementById('ap-namen');
+    if (!t) { return; }
+    if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(t.value); return; }
+    t.focus(); t.select();
+    try { document.execCommand('copy'); } catch (e) { }
+}
+</script>
 </div>
 
 <h2><?php echo ap_e(ap_t('LOXONE.SCHRITT4')); ?></h2>
@@ -970,38 +1117,13 @@ $ap_kachel(ap_t('MQTT.PRAEFIX'), ap_e($ap_praefix));
 
 <h2><?php echo ap_e(ap_t('LOXONE.SCHRITT6')); ?></h2>
 <?php
-/* Welle Bild 12 VOLL (1.2.20, Hausherr 11.10.2026: Vollausstattung, ein absoluter Laie soll das
- * Maximum leicht uebernehmen koennen; Entscheidungen 13.10.2026, Entwurf Welle 12 ap, alle 14 wie
- * empfohlen): zwei Seiten aus dem LoxBerry-Plugins Musterprojekt, dort in Loxone Config gebaut und
- * mit leitungen_setzen.py verbunden (Musterprojekt/baustein_listen.txt, Abschnitte "APC-UPS NG" 36
- * und "APC-UPS NG Akku und Netz" 42 Zeilen). Je Seite: Ueberschrift, Kasten "So uebernehmen Sie
- * diese Seite", Tabelle, Hinweise, Bild, Link - alle immer sichtbar. Bis 1.2.19 stand hier eine
- * Liste mit 15 Zeilen.
- * Die Namen der Eingaenge kommen aus DEMSELBEN XML wie der Knopf "Vorlage fuer den MQTT-Weg
- * erzeugen" (ap_vorlage()), der Vorlagentitel aus dessen Kopf. Die Virtuellen Texteingaenge legt
- * keine Vorlage an (Regeln/07); ihr Name ist der Name, den das MQTT-Gateway vergibt (Praefix_Thema,
- * Schraegstriche zu Unterstrichen). Texte aus [LOXONE]; jede Zelle ist fertiges, maskiertes HTML.
- * Zeile: array(Nr, Typ, Name, Parameter, Eingaenge). */
-list($ap_bs_vdatei, $ap_bs_vxml) = ap_vorlage($ap_cfg, 'mqtt_in');
-$ap_bs_vkopf = 'APC-UPS NG';
-if (preg_match('/<VirtualInHttp [^>]*?Title="([^"]*)"/', $ap_bs_vxml, $ap_bs_treffer)) {
-    $ap_bs_vkopf = html_entity_decode($ap_bs_treffer[1], ENT_QUOTES | ENT_XML1, 'UTF-8');
-}
-$ap_bs_vi_titel = array();
-$ap_bs_themen = array_keys(ap_vorlage_themen());
-if (preg_match_all('/<VirtualInHttpCmd Title="([^"]*)"/', $ap_bs_vxml, $ap_bs_treffer)
-        && count($ap_bs_treffer[1]) === count($ap_bs_themen)) {
-    foreach ($ap_bs_themen as $ap_bs_i => $ap_bs_th) {
-        $ap_bs_vi_titel[$ap_bs_th] = html_entity_decode($ap_bs_treffer[1][$ap_bs_i], ENT_QUOTES | ENT_XML1, 'UTF-8');
-    }
-}
-/* Name, den das MQTT-Gateway vergibt: Praefix und Thema, Schraegstriche zu Unterstrichen
- * (1.2.21: ap_gateway_name(), dieselbe Funktion wie die Titel der Vorlage). */
+/* Welle Bild 12 VOLL (1.2.20), neu gefasst in 1.2.23 (Gruppe 16, Entwurf Abschnitt 9): zwei Seiten aus dem
+ * LoxBerry-Plugins Musterprojekt (Musterprojekt/baustein_listen.txt, Abschnitte "APC-UPS NG" 39 und
+ * "APC-UPS NG Akku und Netz" 43 Zeilen). Die Eingaenge sind seit 1.2.23 einfache Virtuelle Eingaenge mit dem
+ * Namen, den das MQTT-Gateway vergibt (ap_gateway_name()) - keine VirtualInHttp-Vorlage mehr. Texte aus
+ * [LOXONE]; jede Zelle ist fertiges, maskiertes HTML. Zeile: array(Nr, Typ, Name, Parameter, Eingaenge). */
 $ap_bs_gw = function ($thema) use ($ap_praefix) {
     return ap_gateway_name($ap_praefix, $thema);
-};
-$ap_bs_vi = function ($thema) use ($ap_bs_vi_titel, $ap_bs_gw) {
-    return isset($ap_bs_vi_titel[$thema]) ? $ap_bs_vi_titel[$thema] : $ap_bs_gw($thema);
 };
 /* Erst vsprintf auf den Sprachtext, dann maskieren: eingesetzte Namen kommen nie roh heraus. */
 $ap_bs_k = function ($schluessel, $argumente = array()) {
@@ -1012,10 +1134,9 @@ $ap_bs_mono = function ($s) { return '<span class="sm-mono">' . ap_e($s) . '</sp
 $ap_bs_strich = '&mdash;';
 $ap_bs_ein = function ($nr) use ($ap_bs_k) { return $ap_bs_k('E_EIN', array($nr)); };
 $ap_bs_aus = function ($pin, $nr) use ($ap_bs_k) { return $ap_bs_k('E_AUSGANG', array($pin, $nr)); };
-/* Eingang aus der Vorlage "APC-UPS NG": Typ mit Vorlagentitel, Name aus dem XML. */
-$ap_bs_vi_z = function ($nr, $thema, $param, $verb) use ($ap_bs_k, $ap_bs_vi, $ap_bs_mono, $ap_bs_vkopf) {
-    return array($nr, $ap_bs_k('TYP_VI', array($ap_bs_vkopf)), $ap_bs_mono($ap_bs_vi($thema)),
-                 $ap_bs_k($param), $verb);
+/* Virtueller Eingang: Name = Gateway-Name des Themas. */
+$ap_bs_vi_z = function ($nr, $thema, $param) use ($ap_bs_k, $ap_bs_gw, $ap_bs_mono, $ap_bs_strich) {
+    return array($nr, $ap_bs_k('TYP_VI'), $ap_bs_mono($ap_bs_gw($thema)), $ap_bs_k($param), $ap_bs_strich);
 };
 /* Virtueller Texteingang: Name = Gateway-Name des Themas. */
 $ap_bs_tx_z = function ($nr, $thema, $param) use ($ap_bs_k, $ap_bs_gw, $ap_bs_mono, $ap_bs_strich) {
@@ -1026,16 +1147,18 @@ $ap_bs_zl = function ($nr, $typ, $s, $param, $verb) use ($ap_bs_k, $ap_bs_strich
     return array($nr, $ap_bs_k($typ), $ap_bs_k($s . '_NAME'), $param === '' ? $ap_bs_strich : $ap_bs_k($param),
                  $verb);
 };
+$ap_bs_s1_vi = array('on_battery', 'alarm_level', 'data_valid', 'replace_battery', 'time_left', 'status/zaehler',
+                     'service/online', 'battery_charge', 'status/ok', 'time_on_battery', 'shutdown_pending');
 $ap_bs_seiten = array(
     array('kopf' => 'BL_S1', 'seite' => 'APC-UPS NG', 'bild' => 'einbindung_loxone.png', 'zeilen' => array(
-        $ap_bs_vi_z(1, 'on_battery', 'S1_01_PARAM', $ap_bs_k('E_GATEWAY')),
-        $ap_bs_vi_z(2, 'alarm_level', 'S1_02_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(3, 'data_valid', 'S1_03_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(4, 'replace_battery', 'S1_04_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(5, 'time_left', 'S1_05_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(6, 'timestamp', 'S1_06_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(7, 'service/online', 'S1_07_PARAM', $ap_bs_strich),
-        $ap_bs_zl(8, 'T_EVZ', 'S1_08', 'S1_08_PARAM', $ap_bs_ein(1)),
+        $ap_bs_vi_z(1, 'on_battery', 'S1_01_PARAM'),
+        $ap_bs_vi_z(2, 'alarm_level', 'S1_02_PARAM'),
+        $ap_bs_vi_z(3, 'data_valid', 'S1_03_PARAM'),
+        $ap_bs_vi_z(4, 'replace_battery', 'S1_04_PARAM'),
+        $ap_bs_vi_z(5, 'time_left', 'S1_05_PARAM'),
+        $ap_bs_vi_z(6, 'status/zaehler', 'S1_06_PARAM'),
+        $ap_bs_vi_z(7, 'service/online', 'S1_07_PARAM'),
+        $ap_bs_zl(8, 'T_EVZ', 'S1_08', 'S1_08_PARAM', $ap_bs_ein(37)),
         $ap_bs_zl(9, 'T_NICHT', 'S1_09', '', $ap_bs_ein(3)),
         $ap_bs_zl(10, 'T_ODER', 'S1_10', '', 'I1 = #8, I2 = #24'),
         $ap_bs_zl(11, 'T_ODER', 'S1_11', '', 'I1 = #10, I2 = #9'),
@@ -1043,8 +1166,8 @@ $ap_bs_seiten = array(
         $ap_bs_zl(13, 'T_SCHWELL', 'S1_13', 'S1_13_PARAM', $ap_bs_ein(2)),
         $ap_bs_zl(14, 'T_MERKER', 'S1_14', 'S1_14_PARAM', $ap_bs_ein(13)),
         $ap_bs_zl(15, 'T_STATUS', 'S1_15', 'S1_15_PARAM', 'V1 = #2, V2 = #5, V3 = #16, V4 = #3, V5 = #26, V6 = #34'),
-        $ap_bs_vi_z(16, 'battery_charge', 'S1_16_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(17, 'valid', 'S1_17_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(16, 'battery_charge', 'S1_16_PARAM'),
+        $ap_bs_vi_z(17, 'status/ok', 'S1_17_PARAM'),
         $ap_bs_zl(18, 'T_KONSTANTE', 'S1_18', 'S1_18_PARAM', $ap_bs_strich),
         $ap_bs_zl(19, 'T_VALID', 'S1_19', 'S1_19_PARAM', 'V = #6, En = #18'),
         $ap_bs_zl(20, 'T_NICHT', 'S1_20', '', 'I = #7'),
@@ -1052,29 +1175,32 @@ $ap_bs_seiten = array(
         $ap_bs_zl(22, 'T_ODER', 'S1_22', 'S1_22_PARAM', 'I1 = ' . $ap_bs_aus('E', 19) . ', I2 = #20'),
         $ap_bs_zl(23, 'T_ODER', 'S1_23', 'S1_23_PARAM', 'I1 = #22, I2 = #21'),
         $ap_bs_zl(24, 'T_EVZ', 'S1_24', 'S1_24_PARAM', $ap_bs_ein(23)),
-        $ap_bs_zl(25, 'T_BENACHR', 'S1_25', 'S1_25_PARAM', $ap_bs_ein(4)),
-        $ap_bs_vi_z(26, 'time_on_battery', 'S1_26_PARAM', $ap_bs_strich),
+        $ap_bs_zl(25, 'T_BENACHR', 'S1_25', 'S1_25_PARAM', $ap_bs_ein(38)),
+        $ap_bs_vi_z(26, 'time_on_battery', 'S1_26_PARAM'),
         $ap_bs_zl(27, 'T_FLANKE', 'S1_27', '', $ap_bs_ein(8)),
         $ap_bs_zl(28, 'T_BENACHR', 'S1_28', 'S1_28_PARAM', $ap_bs_k('E_EIN_AUSGANG', array('Off', 27))),
         $ap_bs_zl(29, 'T_EVZ', 'S1_29', 'S1_29_PARAM', $ap_bs_ein(13)),
         $ap_bs_zl(30, 'T_BENACHR', 'S1_30', 'S1_30_PARAM', $ap_bs_ein(29)),
-        $ap_bs_vi_z(31, 'shutdown_pending', 'S1_31_PARAM', $ap_bs_strich),
-        $ap_bs_zl(32, 'T_BENACHR', 'S1_32', 'S1_32_PARAM', $ap_bs_ein(31)),
+        $ap_bs_vi_z(31, 'shutdown_pending', 'S1_31_PARAM'),
+        $ap_bs_zl(32, 'T_BENACHR', 'S1_32', 'S1_32_PARAM', $ap_bs_ein(39)),
         $ap_bs_tx_z(33, 'status', 'S1_33_PARAM'),
         $ap_bs_tx_z(34, 'event', 'S1_34_PARAM'),
         $ap_bs_tx_z(35, 'last_error', 'S1_35_PARAM'),
         $ap_bs_zl(36, 'T_STATUS', 'S1_36', 'S1_36_PARAM', 'V1 = #7, V2 = ' . $ap_bs_aus('E', 19) . ', V3 = #6, V4 = #17, V5 = #35, V6 = #3, V7 = #33'),
+        $ap_bs_zl(37, 'T_FORMEL', 'S1_37', 'S1_37_PARAM', 'I1 = #1'),
+        $ap_bs_zl(38, 'T_FORMEL', 'S1_38', 'S1_38_PARAM', 'I1 = #4'),
+        $ap_bs_zl(39, 'T_FORMEL', 'S1_39', 'S1_39_PARAM', 'I1 = #31'),
         ),
         'schritte' => array(
             array('S1_SCHRITT1', array(ap_t('REITER.TEST'), ap_t('TEST.K_ABFRAGEN'), ap_t('REITER.EINSTELLUNGEN'), ap_t('EINST.PLUGIN_EINGESCHALTET'))),
-            array('S1_SCHRITT2', array($ap_praefix . '/#', $ap_praefix)),
-            array('S1_SCHRITT3', array(ap_t('LOXONE.KNOPF_MQTT'), $ap_bs_vdatei)),
+            array('S1_SCHRITT2', array($ap_praefix . '/#', $ap_praefix . '/status/ok', $ap_praefix . '/service/online')),
+            array('S1_SCHRITT3', array(implode(', ', array_map($ap_bs_gw, $ap_bs_s1_vi)))),
             array('S1_SCHRITT4', array($ap_bs_gw('status'), $ap_bs_gw('event'), $ap_bs_gw('last_error'))),
-            array('S1_SCHRITT5', array($ap_bs_vkopf, implode(', ', array_map($ap_bs_vi, array('on_battery', 'alarm_level', 'data_valid', 'replace_battery', 'time_left', 'timestamp', 'service/online', 'battery_charge', 'valid', 'time_on_battery', 'shutdown_pending'))))),
+            array('S1_SCHRITT5', array()),
             array('S1_SCHRITT6', array()),
             array('S1_SCHRITT7', array()),
             array('S1_SCHRITT8', array(ap_t('LOXONE.SP_EINGAENGE'), ap_t('LOXONE.SP_PARAMETER'))),
-            array('S1_SCHRITT9', array($ap_bs_vi('timestamp'), ap_t('REITER.TEST'), ap_t('TEST.K_WERTE'))),
+            array('S1_SCHRITT9', array($ap_bs_gw('status/zaehler'), ap_t('REITER.TEST'), ap_t('TEST.K_WERTE'))),
         ),
         'hinweise' => array(
             array('S1_H1', array()),
@@ -1088,24 +1214,24 @@ $ap_bs_seiten = array(
             array('S1_H8', array(ap_t('REITER.EINSTELLUNGEN'), ap_t('EINST.MELDEWEGE'))),
         )),
     array('kopf' => 'BL_S2', 'seite' => 'APC-UPS NG Akku und Netz', 'bild' => 'einbindung_loxone_akku_netz.png', 'zeilen' => array(
-        $ap_bs_vi_z(1, 'battery_charge', 'S2_01_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(2, 'load_percent', 'S2_02_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(3, 'load_watt', 'S2_03_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(4, 'nominal_power', 'S2_04_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(5, 'line_voltage', 'S2_05_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(6, 'output_voltage', 'S2_06_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(7, 'line_frequency', 'S2_07_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(8, 'battery_voltage', 'S2_08_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(9, 'nominal_battery_volt', 'S2_09_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(10, 'internal_temp', 'S2_10_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(11, 'battery_age_months', 'S2_11_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(12, 'replace_battery', 'S2_12_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(13, 'transfers', 'S2_13_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(14, 'cumulative_on_battery', 'S2_14_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(15, 'shutdown_charge', 'S2_15_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(16, 'shutdown_minutes', 'S2_16_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(17, 'shutdown_timeout', 'S2_17_PARAM', $ap_bs_strich),
-        $ap_bs_vi_z(18, 'on_line', 'S2_18_PARAM', $ap_bs_strich),
+        $ap_bs_vi_z(1, 'battery_charge', 'S2_01_PARAM'),
+        $ap_bs_vi_z(2, 'load_percent', 'S2_02_PARAM'),
+        $ap_bs_vi_z(3, 'load_watt', 'S2_03_PARAM'),
+        $ap_bs_vi_z(4, 'nominal_power', 'S2_04_PARAM'),
+        $ap_bs_vi_z(5, 'line_voltage', 'S2_05_PARAM'),
+        $ap_bs_vi_z(6, 'output_voltage', 'S2_06_PARAM'),
+        $ap_bs_vi_z(7, 'line_frequency', 'S2_07_PARAM'),
+        $ap_bs_vi_z(8, 'battery_voltage', 'S2_08_PARAM'),
+        $ap_bs_vi_z(9, 'nominal_battery_volt', 'S2_09_PARAM'),
+        $ap_bs_vi_z(10, 'internal_temp', 'S2_10_PARAM'),
+        $ap_bs_vi_z(11, 'battery_age_months', 'S2_11_PARAM'),
+        $ap_bs_vi_z(12, 'replace_battery', 'S2_12_PARAM'),
+        $ap_bs_vi_z(13, 'transfers', 'S2_13_PARAM'),
+        $ap_bs_vi_z(14, 'cumulative_on_battery', 'S2_14_PARAM'),
+        $ap_bs_vi_z(15, 'shutdown_charge', 'S2_15_PARAM'),
+        $ap_bs_vi_z(16, 'shutdown_minutes', 'S2_16_PARAM'),
+        $ap_bs_vi_z(17, 'shutdown_timeout', 'S2_17_PARAM'),
+        $ap_bs_vi_z(18, 'on_line', 'S2_18_PARAM'),
         $ap_bs_tx_z(19, 'model', 'S2_19_PARAM'),
         $ap_bs_tx_z(20, 'serial', 'S2_20_PARAM'),
         $ap_bs_tx_z(21, 'battery_date', 'S2_21_PARAM'),
@@ -1119,7 +1245,7 @@ $ap_bs_seiten = array(
         $ap_bs_zl(29, 'T_EVZ', 'S2_29', 'S2_29_PARAM', $ap_bs_ein(28)),
         $ap_bs_zl(30, 'T_BENACHR', 'S2_30', 'S2_30_PARAM', $ap_bs_ein(29)),
         $ap_bs_zl(31, 'T_SCHWELL', 'S2_31', 'S2_31_PARAM', $ap_bs_ein(1)),
-        $ap_bs_zl(32, 'T_UND', 'S2_32', 'S2_32_PARAM', 'I1 = #31, I2 = #18'),
+        $ap_bs_zl(32, 'T_UND', 'S2_32', 'S2_32_PARAM', 'I1 = #31, I2 = #43'),
         $ap_bs_zl(33, 'T_EVZ', 'S2_33', 'S2_33_PARAM', $ap_bs_ein(32)),
         $ap_bs_zl(34, 'T_BENACHR', 'S2_34', 'S2_34_PARAM', $ap_bs_ein(33)),
         $ap_bs_zl(35, 'T_IMPULS', 'S2_35', 'S2_35_PARAM', $ap_bs_strich),
@@ -1130,18 +1256,19 @@ $ap_bs_seiten = array(
         $ap_bs_zl(40, 'T_STATUS', 'S2_40', 'S2_40_PARAM', 'V1 = #12, V2 = #1, V3 = #11, V4 = #21, V5 = #8, V6 = #9, V7 = #22, V8 = #14'),
         $ap_bs_zl(41, 'T_STATUS', 'S2_41', 'S2_41_PARAM', 'V1 = #5, V2 = #7, V3 = #6, V4 = #2, V5 = #3, V6 = #4, V7 = #37, V8 = #24'),
         $ap_bs_zl(42, 'T_STATUS', 'S2_42', 'S2_42_PARAM', 'V1 = #19, V2 = #20, V3 = #23, V4 = #15, V5 = #16, V6 = #17'),
+        $ap_bs_zl(43, 'T_FORMEL', 'S2_43', 'S2_43_PARAM', 'I1 = #18'),
         ),
         'schritte' => array(
             array('S2_SCHRITT1', array()),
             array('S2_SCHRITT2', array($ap_bs_gw('model'), $ap_bs_gw('serial'), $ap_bs_gw('battery_date'), $ap_bs_gw('self_test_result'), $ap_bs_gw('self_test_interval'), $ap_bs_gw('last_transfer'))),
-            array('S2_SCHRITT3', array($ap_bs_vkopf, $ap_bs_vi('battery_charge'), $ap_bs_vi('replace_battery'), $ap_bs_vi('battery_charge'), $ap_bs_vi('load_watt'), $ap_bs_vi('line_voltage'), $ap_bs_vi('internal_temp'))),
+            array('S2_SCHRITT3', array($ap_bs_gw('battery_charge'), $ap_bs_gw('replace_battery'), $ap_bs_gw('battery_charge'), $ap_bs_gw('load_watt'), $ap_bs_gw('line_voltage'), $ap_bs_gw('internal_temp'))),
             array('S2_SCHRITT4', array()),
             array('S2_SCHRITT5', array(ap_t('LOXONE.SP_EINGAENGE'), ap_t('LOXONE.SP_PARAMETER'))),
             array('S2_SCHRITT6', array(ap_t('REITER.TEST'), ap_t('TEST.K_WERTE'))),
         ),
         'hinweise' => array(
             array('S2_H1', array()),
-            array('S2_H2', array($ap_bs_vi('battery_charge'))),
+            array('S2_H2', array($ap_bs_gw('battery_charge'))),
             array('S2_H3', array()),
             array('S2_H4', array()),
             array('S2_H5', array()),
@@ -1186,11 +1313,38 @@ $ap_bs_seiten = array(
 <div class="sm-step"><?php echo ap_t('LOXONE.SCHRITT7_TEXT'); ?></div>
 
 <h2><?php echo ap_e(ap_t('LOXONE.ALTER_WEG')); ?></h2>
-<div class="sm-hilfe">
-<?php echo ap_t('LOXONE.ALTER_WEG_TEXT'); ?>
-<p class="sm-pre">http://<?php echo ap_e(gethostname() ? gethostname() : 'loxberry'); ?>/plugins/<?php echo ap_e($ap_p['plugin']); ?>/index.php</p>
-<p><?php echo ap_t('LOXONE.ALTER_WEG_ADRESSE'); ?></p>
+<?php /* 1.2.23 (E5, Entwurf 2.5/3.2): zugeklappt "Bestehende Anlagen: HTTP-Endpunkt (XML)" mit dem Haken
+       endpunkt_ein (Neuinstallation aus, Update an), der Adresse aus Sicht des Miniservers (A2: LAN-Adresse
+       und Webserver-Port) und dem grauen Knopf "Vorlage alter Weg (XML)" (bleibt, Entscheidung 2). */ ?>
+<details class="sm-step">
+<summary><b><?php echo ap_e(ap_t('LOXONE.ALTER_WEG_ZU')); ?></b> &mdash; <?php
+    echo ap_endpunkt_ein($ap_cfg) ? '<span class="sm-an">' . ap_e(ap_t('ALLGEMEIN.EIN')) . '</span>'
+                                  : '<span class="sm-aus">' . ap_e(ap_t('ALLGEMEIN.AUS')) . '</span>'; ?></summary>
+<div class="sm-hilfe"><?php echo ap_t('LOXONE.ALTER_WEG_TEXT'); ?></div>
+<p class="sm-pre"><?php echo ap_e(ap_endpunkt_adresse()); ?></p>
+<p class="sm-hilfe"><?php echo ap_t('LOXONE.ALTER_WEG_ADRESSE'); ?></p>
+<form method="post" action="index.php">
+<input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+<input data-role="none" type="hidden" name="ap_form" value="<?php echo ap_e($ap_formtoken); ?>">
+<div class="sm-feld">
+<label><input data-role="none" type="checkbox" name="endpunkt_ein" value="1"<?php
+    echo ap_fwert('endpunkt', 'endpunkt_ein', ap_roh($ap_cfg, 'endpunkt_ein')) === '1' ? ' checked' : ''; ?>>
+<?php echo ap_e(ap_t('LOXONE.ENDPUNKT_EIN')); ?></label>
+<div class="sm-hilfe"><?php echo ap_t('LOXONE.ENDPUNKT_EIN_HILFE'); ?></div>
 </div>
+<div class="sm-knopfreihe">
+<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="save_endpunkt" value="1"><?php echo ap_e(ap_t('ALLGEMEIN.SPEICHERN')); ?></button>
+</div>
+</form>
+<form method="post" action="index.php">
+<input data-role="none" type="hidden" name="activetab" value="tab-loxone">
+<input data-role="none" type="hidden" name="ap_form" value="<?php echo ap_e($ap_formtoken); ?>">
+<div class="sm-knopfreihe">
+<button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="xml_in"><?php echo ap_e(ap_t('LOXONE.KNOPF_XML')); ?></button>
+</div>
+</form>
+<p class="sm-hilfe"><?php echo ap_e(ap_t('LOXONE.IMPORT_DOPPELT')); ?></p>
+</details>
 </div>
 
 <!-- ================= Reiter: Test ================= -->

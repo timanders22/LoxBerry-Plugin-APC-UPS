@@ -1,8 +1,10 @@
 #!/bin/sh
 
 # To use important variables from command line use the following code:
-PSHNAME=$2    # Second argument is Plugin-Name for scipts etc.
-PDIR=$3       # Third argument is Plugin installation folder
+# A6 (1.2.23): mit Vorgabe wie NETZ_PDIR unten - ohne Argumente entstand bis
+# 1.2.22 log/plugins/.log (gemessen, Pruefbericht A6).
+PSHNAME="${2:-apc_ups_ng}"    # Second argument is Plugin-Name for scipts etc.
+PDIR="${3:-apc_ups_ng}"       # Third argument is Plugin installation folder
 
 # ---------- Die Wurzel: gelesen, nicht geraten ----------
 # Bis 1.2.12 war sie das fuenfte Argument, ohne Pruefung und ohne Suche.
@@ -46,20 +48,24 @@ fi
 LBPLOG="${LBPLOG:-$APC_BASE/log/plugins}"
 LBPBIN="${LBPBIN:-$APC_BASE/bin/plugins}"
 
-PLOG=$LBPLOG/$PDIR
+PLOG="$LBPLOG/$PDIR"
 
 # -p: der Ordner kann schon da sein (Upgrade, oder log/plugins wurde
 # aus den Skeletten vorbelegt). Ohne -p schreibt der Installer bei
 # JEDEM Upgrade 'mkdir: cannot create directory ... File exists' ins
 # Protokoll - am 06.09.2026 im Installationsprotokoll gesehen.
-mkdir -p $PLOG
-touch $PLOG/$PSHNAME.log
-chown loxberry:loxberry $PLOG/$PSHNAME.log
+mkdir -p "$PLOG"
+touch "$PLOG/$PSHNAME.log"
+chown loxberry:loxberry "$PLOG/$PSHNAME.log"
 
 # --- APC-UPS NG --------------------------------------------------------------
 chmod 755 "$LBPBIN/$PDIR"/*.py 2>/dev/null
 
 # apcupsd muss laufen, sonst antwortet apcaccess nicht.
+# E2 (1.2.23): ohne root wirkungslos - LoxBerry fuehrt dieses Skript als
+# loxberry aus (plugininstall.pl, sudo -n -u loxberry). Der Installer
+# installiert apcupsd ueber dpkg/apt, und die Unit startet von selbst. Die
+# Zeilen bleiben fuer den Aufruf als root von Hand; Fehler gehen stumm weg.
 if command -v systemctl >/dev/null 2>&1; then
     systemctl enable apcupsd >/dev/null 2>&1
     systemctl start  apcupsd >/dev/null 2>&1
@@ -182,6 +188,9 @@ apc_cfg_hat_inhalt() {
     grep -qE '^\[apc_ups_ng\][[:space:]]*$' "$1" 2>/dev/null || return 1
     grep -qE '^formtoken=[0-9a-fA-F]{32}[[:space:]]*$' "$1" 2>/dev/null
 }
+# N7 (1.2.23): soll ist eine LISTE von Paketsummen (Leerzeichen dazwischen) - die
+# neue vorn, die der Vorfassungen dahinter: eine Paket-cfg einer Vorfassung nach
+# einem abgebrochenen Update gilt weiter als Archivvorgabe.
 netz_zurueck() {
     datei=$1; soll=$2
     ziel="$NETZ_CFG/$datei"
@@ -192,7 +201,9 @@ netz_zurueck() {
         verloren=1
     else
         ist=$(sha256sum "$ziel" 2>/dev/null | cut -d" " -f1)
-        [ -n "$ist" ] && [ "$ist" = "$soll" ] && verloren=1
+        for s in $soll; do
+            [ -n "$ist" ] && [ "$ist" = "$s" ] && verloren=1
+        done
     fi
     [ "$verloren" = "1" ] || return 0
     # Eingespielt wird nur eine Zweitschrift, die selbst einen Stand traegt -
@@ -207,6 +218,8 @@ netz_zurueck() {
         return 0
     fi
     if cp -p "$zweit" "$ziel" 2>/dev/null && cmp -s "$zweit" "$ziel"; then
+        # A4 (1.2.23): 0600 - die Datei traegt formtoken und die Sprechtoken.
+        chmod 600 "$ziel" 2>/dev/null
         echo "<OK> $datei aus der Zweitschrift wiederhergestellt."
     else
         echo "<WARNING> $datei liess sich nicht zurueckspielen. Die Sicherung"
@@ -229,9 +242,13 @@ netz_zurueck() {
 # <name>.alt gelegt und EINMAL gemeldet; die Oberflaeche und der Dienst lesen
 # .alt nie, die Deinstallation raeumt es ab.
 APC_MARKE="$NETZ_BASE/data/plugins/$NETZ_PDIR.upgrade_laeuft"
+# Paketsummen (N7): 1.2.23 vorn, 1.2.22 und frueher (db6b2b24) dahinter.
+AP_VORGABE_SUMMEN="9cbfe4b6fc20b98f228d80a729a765c1f972a76bbb9e42739dc0a47de938e2ba db6b2b24b51a7b599d77f56ea00e03a765b25fad706bb220f2f21a3a20efeda2"
 if [ -f "$APC_MARKE" ]; then
-    netz_zurueck "apc_ups_ng.cfg" "db6b2b24b51a7b599d77f56ea00e03a765b25fad706bb220f2f21a3a20efeda2"
+    netz_zurueck "apc_ups_ng.cfg" "$AP_VORGABE_SUMMEN"
 else
+    # A4 (1.2.23): die Archivdatei kommt mit 0644 - sie traegt bald formtoken.
+    chmod 600 "$NETZ_CFG/apc_ups_ng.cfg" 2>/dev/null
     APC_BEISEITE=""
     APC_ZW="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.apc_ups_ng.cfg"
     if [ -e "$APC_ZW" ] || [ -L "$APC_ZW" ]; then

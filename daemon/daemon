@@ -157,6 +157,9 @@ fi
 
 # Der Ueberwachungsdienst braucht keine Rootrechte - apcaccess fragt den
 # laufenden apcupsd ueber das Netz ab. Deshalb als loxberry starten.
-su loxberry -c "nohup $pluginbindir/apc_service.py >> $log 2>&1 &" >/dev/null 2>&1
+# A8 (1.2.23): -s /bin/sh und python3 ausdruecklich - unabhaengig von der
+# Anmeldeschale des Benutzers und vom Ausfuehrungsrecht der Datei. Die
+# Erkennung des Dienstes (argv[0] python3, argv[1] der Pfad) bleibt gleich.
+su -s /bin/sh loxberry -c "nohup python3 '$pluginbindir/apc_service.py' >> '$log' 2>&1 &" >/dev/null 2>&1
 
 exit 0

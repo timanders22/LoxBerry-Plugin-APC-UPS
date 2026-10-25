@@ -72,10 +72,15 @@ function ap_pruefzeile($frage, $zustand, $antwort)
  * selbst aufrufen (der eingebaute PHP-Server ist einlaeufig), und ein Kreuz
  * wuerde dort dauerhaft stehen, ohne etwas ueber den Pruefling zu sagen.
  */
-function ap_endpunkt_pruefen()
+function ap_endpunkt_pruefen($cfg = null)
 {
+    /* E5 (1.2.23): ausgeschaltet ist eine Entscheidung, kein Fehler (Regeln/04) - Punkt ohne Aufruf. */
+    if (is_array($cfg) && !ap_endpunkt_ein($cfg)) {
+        return array(null, ap_e(ap_t('TEST.EP_AUS')));
+    }
     $ordner = ap_paths()['plugin'];
-    $url = 'http://127.0.0.1/plugins/' . rawurlencode($ordner) . '/index.php?selftest=1';
+    // A2 (1.2.23): an den Webserver-Port des LoxBerry (general.json), nicht fest an Port 80.
+    $url = 'http://127.0.0.1:' . ap_webport() . '/plugins/' . rawurlencode($ordner) . '/index.php?selftest=1';
     $ctx = stream_context_create(array('http' => array(
         'timeout' => 3, 'ignore_errors' => true, 'method' => 'GET',
     )));
@@ -123,11 +128,15 @@ function ap_themen_kongruenz()
         return array(null, ap_e(sprintf(ap_t('TEST.TH_UNLESBAR'), $rc)));
     }
     $php = array_keys(ap_themen());
+    // Seit 1.2.23 (A10) auch der Fehlwert: fehlt einer an einem Messwert oder liegt er ausserhalb
+    // von min..max, wird die Zeile rot.
     $abw = array_merge(
         array_diff($j['liste'], $php),
         array_diff($php, $j['liste']),
         isset($j['nur_liste']) ? $j['nur_liste'] : array(),
-        isset($j['nur_code']) ? $j['nur_code'] : array()
+        isset($j['nur_code']) ? $j['nur_code'] : array(),
+        isset($j['fehlwert_fehlt']) ? $j['fehlwert_fehlt'] : array(),
+        isset($j['fehlwert_falsch']) ? $j['fehlwert_falsch'] : array()
     );
     if ($j['gleich'] && !$abw) {
         return array(true, ap_e(sprintf(ap_t('TEST.TH_OK'), count($php))));
@@ -343,27 +352,69 @@ function ap_test_selbstpruefung($cfg, $w, $pid, $alter, $broker, $autostart)
     $zaehle($zk);
     ap_pruefzeile(ap_t('TEST.F_KONGRUENZ'), $zk, $tk);
 
-    list($ze, $te) = ap_endpunkt_pruefen();
+    list($ze, $te) = ap_endpunkt_pruefen($cfg);
     $zaehle($ze);
     ap_pruefzeile(ap_t('TEST.F_ENDPUNKT'), $ze, $te);
 
-    // Die Vorlage: wohlgeformt oder nicht, das ist nicht verhandelbar.
-    list($vname, $vinhalt) = ap_vorlage($cfg, 'mqtt_in');
+    // Die Vorlage: wohlgeformt oder nicht, das ist nicht verhandelbar. Seit 1.2.23 nur noch die
+    // XML-Vorlage des alten Wegs (die MQTT-Vorlage ist entfallen, E6).
+    list($vname, $vinhalt) = ap_vorlage($cfg, 'xml_in');
     $vorher = libxml_use_internal_errors(true);
     $ok = simplexml_load_string($vinhalt) !== false;
     libxml_clear_errors();
     libxml_use_internal_errors($vorher);
     // U5 (1.2.14): eine wohlgeformte Vorlage ohne einen einzigen Eingang ist
     // nutzlos - bis 1.2.13 stand dann ein Haken ("0 Eingaenge").
-    $n_ein = count(ap_vorlage_themen());
+    $n_ein = substr_count($vinhalt, '<VirtualInHttpCmd');
     if (!$ok) {
         $vtext = ap_t('TEST.A_VORLAGE_KAPUTT');
     } elseif ($n_ein === 0) {
         $vtext = sprintf(ap_t('TEST.A_VORLAGE_LEER'), $vname);
     } else {
-        $vtext = sprintf(ap_t('TEST.A_VORLAGE'), $vname, $n_ein, count(ap_text_themen()));
+        $vtext = sprintf(ap_t('TEST.A_VORLAGE'), $vname, $n_ein);
     }
     ap_pruefzeile(ap_t('TEST.F_VORLAGE'), $zaehle($ok && $n_ein > 0), ap_e($vtext));
+
+    // --- Seit 1.2.23 (Gruppe 16) ------------------------------------------
+    // Namenstabelle: jeder Name entsteht aus einem Thema der Liste nach der Regel des Gateways;
+    // ein verdrehter Name oder ein Haken ohne Thema -> Kreuz (Entwurf 2.4).
+    list($nok, $nn, $nh, $nnc, $nabw) = ap_namen_probe($cfg);
+    ap_pruefzeile(ap_t('TEST.F_NAMEN'), $zaehle($nok),
+        ap_e($nok ? sprintf(ap_t('TEST.A_NAMEN'), $nn, $nh, $nnc)
+                  : sprintf(ap_t('TEST.A_NAMEN_FALSCH'), implode(', ', $nabw))));
+
+    // Sprachausgabe (V1): die Zeile des Moduls; Ausgabeart aus -> Punkt "aus (ab Werk)". Andere
+    // Plugins werden nur gefragt, wenn dieser Reiter serverseitig der offene ist (hier immer).
+    if (function_exists('ansage_pruefzeile')) {
+        list($ast, $atext) = ansage_pruefzeile(ap_tts($cfg), true, ap_ansage_k());
+        ap_pruefzeile(ap_t('TEST.F_ANSAGE'), $zaehle($ast === 1 ? true : ($ast === 0 ? false : null)), $atext);
+        $anl = array();
+        foreach (array('ausfall', 'rueckkehr', 'vorwarnung', 'abschaltung') as $an) {
+            if (ap_cfg($cfg, 'ansage_' . $an, '1') === '1') { $anl[] = ap_t('EINST.ANSAGE_' . strtoupper($an)); }
+        }
+        $ad = ap_ansage_dienst();
+        $atx = sprintf(ap_t('TEST.A_ANLAESSE'), $anl ? implode(', ', $anl) : '-', ap_cfg($cfg, 'ansage_sperre', '600'));
+        $atx .= ' ' . ($ad ? sprintf(ap_t('TEST.A_ANSAGE_DIENST'), $ad['anlass'],
+                                     isset($ad['zeile']) ? $ad['zeile'] : '-', max(0, time() - (int) $ad['zeit']))
+                           : ap_t('TEST.A_ANSAGE_DIENST_KEINE'));
+        ap_pruefzeile(ap_t('TEST.F_ANLAESSE'), $zaehle(null), ap_e($atx));
+    } else {
+        ap_pruefzeile(ap_t('TEST.F_ANSAGE'), $zaehle(false), ap_e(ap_t('TEST.A_ANSAGE_MODUL_FEHLT')));
+    }
+
+    // Haus-Thema (V2): aus (ab Werk) Punkt; an, aber MQTT aus -> Punkt "wirkt nur mit MQTT"; an und
+    // gesendet (Merker liegt) -> Haken.
+    if (ap_cfg($cfg, 'haus_usv_ein', '0') !== '1') {
+        ap_pruefzeile(ap_t('TEST.F_HAUS'), $zaehle(null),
+            ap_e(ap_haus_usv_merker() ? ap_t('TEST.A_HAUS_AUS_MERKER') : ap_t('TEST.A_HAUS_AUS')));
+    } elseif (!$mqtt_an) {
+        ap_pruefzeile(ap_t('TEST.F_HAUS'), $zaehle(null), ap_e(ap_t('TEST.A_HAUS_OHNE_MQTT')));
+    } elseif (ap_haus_usv_merker()) {
+        ap_pruefzeile(ap_t('TEST.F_HAUS'), $zaehle(true), ap_e(sprintf(ap_t('TEST.A_HAUS_AN'),
+            (is_array($w) && isset($w['alarm_level']) && $w['alarm_level'] !== null) ? $w['alarm_level'] : '-1')));
+    } else {
+        ap_pruefzeile(ap_t('TEST.F_HAUS'), $zaehle(null), ap_e(ap_t('TEST.A_HAUS_NOCH_NICHT')));
+    }
 
     // Alle DREI Stellen gegeneinander: die Positivliste $ap_reiter, die
     // ausgeschriebene Leiste (data-ziel) und die Bereichs-ids.
@@ -598,7 +649,9 @@ function ap_test_ausfuehren($was)
         case 'konfig':
             $t = ap_t('TEST.KO_DATEI') . ' ' . $p['config'] . "\n\n";
             if (is_file($p['config'])) {
-                $t .= (string) @file_get_contents($p['config']);
+                // 1.2.23: formtoken und die Sprechtoken (ansage_geheim()) nie auf der Seite.
+                $t .= (string) preg_replace('/^(formtoken|tts_alexa_token|tts_google_token)=(.+)$/m', '$1=***',
+                                            (string) @file_get_contents($p['config']));
             } else {
                 $t .= ap_t('TEST.KO_FEHLT') . "\n\n";
                 foreach (ap_defaults() as $k => $v) {
@@ -632,7 +685,7 @@ function ap_test_ausfuehren($was)
 
         case 'vorlage':
             $t = '';
-            foreach (array('mqtt_in', 'xml_in') as $art) {
+            foreach (array('xml_in') as $art) {
                 list($name, $inhalt) = ap_vorlage($cfg, $art);
                 $vorher = libxml_use_internal_errors(true);
                 $x = simplexml_load_string($inhalt);
@@ -657,8 +710,7 @@ function ap_test_ausfuehren($was)
                 $t .= sprintf("  %-22s %s\n\n", 'HintText:',
                       strpos($inhalt, 'HintText=') !== false ? $ja : $nein);
             }
-            $t .= sprintf(ap_t('TEST.V_TEXTTHEMEN'),
-                  implode(', ', array_keys(ap_text_themen()))) . "\n";
+            $t .= ap_t('TEST.V_MQTT_ENTFALLEN') . "\n";
             return array(ap_t('TEST.K_VORLAGE'), $t);
 
         case 'mqttinfo':

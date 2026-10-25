@@ -23,6 +23,9 @@
 # ab, also drei Ebenen unter der Wurzel. Eine Rechnung mit ".." landet
 # daneben, und der Waechter lauft dann ins Leere, ohne es zu sagen.
 DIENST="REPLACELBPBINDIR/apc_service.py"
+# A14 (1.2.23): der Name der PID-Datei traegt den Ordner (fuer apc_ups_ng
+# byte-gleich wie bisher).
+APC_PIDNAME="REPLACELBPPLUGINDIR.pid"
 
 # Laeuft gerade eine Aktualisierung, startet der Waechter nichts. Die Marke
 # legt preupgrade.sh neben den Datenordner, postupgrade.sh entfernt sie und
@@ -104,8 +107,8 @@ fi
 # Laeuft er schon? Punktgenau ueber die PID-Datei nachsehen, nicht ueber
 # "pgrep -f apc_service.py": das traefe auch einen offenen Editor oder ein
 # Sicherungsskript, das gerade den Ordner durchsucht.
-PIDF=/run/shm/apc_ups_ng.pid
-[ -f "$PIDF" ] || PIDF="REPLACELBPLOGDIR/apc_ups_ng.pid"
+PIDF="/run/shm/$APC_PIDNAME"
+[ -f "$PIDF" ] || PIDF="REPLACELBPLOGDIR/$APC_PIDNAME"
 if [ -f "$PIDF" ]; then
     P=$(cat "$PIDF" 2>/dev/null)
     if [ -n "$P" ] && kill -0 "$P" 2>/dev/null && apc_ist_dienst "$P" "$DIENST"; then
@@ -128,8 +131,8 @@ for d in /proc/[0-9]*; do
     if apc_ist_dienst "${d#/proc/}" "$DIENST"; then
         WAISE=${d#/proc/}
         sleep 3
-        PIDF=/run/shm/apc_ups_ng.pid
-        [ -f "$PIDF" ] || PIDF="REPLACELBPLOGDIR/apc_ups_ng.pid"
+        PIDF="/run/shm/$APC_PIDNAME"
+        [ -f "$PIDF" ] || PIDF="REPLACELBPLOGDIR/$APC_PIDNAME"
         P=$(cat "$PIDF" 2>/dev/null)
         if [ -n "$P" ] && kill -0 "$P" 2>/dev/null && apc_ist_dienst "$P" "$DIENST"; then
             exit 0
@@ -171,9 +174,10 @@ LOG="REPLACELBPLOGDIR/apc_ups_ng.log"
 WER=$(id -un 2>/dev/null)
 
 if [ "$WER" = "loxberry" ]; then
-    nohup "$DIENST" >> "$LOG" 2>&1 &
+    # A8 (1.2.23): python3 ausdruecklich, wie im Zweig darunter und in daemon/daemon.
+    nohup python3 "$DIENST" >> "$LOG" 2>&1 &
 elif [ "$(id -u 2>/dev/null)" = "0" ]; then
-    su loxberry -c "nohup $DIENST >> $LOG 2>&1 &" >/dev/null 2>&1
+    su -s /bin/sh loxberry -c "nohup python3 '$DIENST' >> '$LOG' 2>&1 &" >/dev/null 2>&1
 else
     MELDUNG="APC-UPS NG: der Waechter laeuft als '$WER' - weder loxberry noch root. Es wird nicht nachgestartet."
     command -v logger >/dev/null 2>&1 && logger -t apc_ups_ng "$MELDUNG"
@@ -188,8 +192,8 @@ fi
 # hat genau daraus ihren Erfolg abgeleitet. Deshalb: kurz warten und
 # nachsehen, ob wirklich einer laeuft.
 sleep 3
-PIDF=/run/shm/apc_ups_ng.pid
-[ -f "$PIDF" ] || PIDF="REPLACELBPLOGDIR/apc_ups_ng.pid"
+PIDF="/run/shm/$APC_PIDNAME"
+[ -f "$PIDF" ] || PIDF="REPLACELBPLOGDIR/$APC_PIDNAME"
 NEU=$(cat "$PIDF" 2>/dev/null)
 if [ -n "$NEU" ] && kill -0 "$NEU" 2>/dev/null && apc_ist_dienst "$NEU" "$DIENST"; then
     command -v logger >/dev/null 2>&1 && logger -t apc_ups_ng "$MELDUNG (PID $NEU)"

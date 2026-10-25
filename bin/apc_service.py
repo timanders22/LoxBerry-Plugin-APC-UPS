@@ -98,8 +98,15 @@ log = logging.getLogger("apc_ups_ng")
 
 LOG_DATEI = os.path.join(gem.LOG_DIR, "apc_ups_ng.log")
 
+# A14 (1.2.23): der Name traegt den Ordner - fuer apc_ups_ng byte-gleich wie bisher;
+# eine Zweitinstallation sperrt ihre eigene Datei statt die der ersten.
 PID_DATEI = os.path.join(gem.LOG_DIR if os.path.isdir("/run/shm") is False else "/run/shm",
-                         "apc_ups_ng.pid")
+                         gem.PLUGIN_NAME + ".pid")
+
+# V1: Aufruf der Bruecke bin/ap_ansage.php. Fest "php" wie apc_notify.php
+# (benachrichtigen()); die Pruefstaende setzen hier eine Attrappe ein.
+ANSAGE_PHP = "php"
+ANSAGE_ZEIT = 20
 _sperre_fh = None
 
 
@@ -336,6 +343,22 @@ class Mqtt:
             log.error("MQTT-Veroeffentlichung fehlgeschlagen: %s", fehler)
             self._abbauen()
 
+    def senden_voll(self, thema, wert, retain=False, qos=0):
+        """V2 (1.2.23): ein Thema OHNE Praefix senden (haus/usv/...). Rueckgabe True,
+        wenn paho die Nachricht angenommen hat."""
+        if not self.client:
+            return False
+        try:
+            info = self.client.publish(thema, str(wert), qos=qos, retain=retain)
+        except Exception as fehler:  # noqa: BLE001
+            log.error("MQTT-Veroeffentlichung fehlgeschlagen: %s", fehler)
+            self._abbauen()
+            return False
+        try:
+            return int(getattr(info, "rc", 0) or 0) == 0
+        except (TypeError, ValueError):
+            return True
+
     def _abbauen(self):
         """Den Client ganz abbauen (C4): abmelden, Netzfaden anhalten, Socket
         schliessen. Bis 1.2.13 stand nach einem gescheiterten publish() nur
@@ -454,6 +477,21 @@ class Dienst:
         # erledigt, und wann der naechste Versuch faellig ist.
         self._altlast_erledigt = ""
         self._altlast_naechster = 0.0
+        # E4 (1.2.23): Lebenszeichen in Hausform. _ok: -1 bis zur ersten Abfrage,
+        # dann 1 (apcaccess hat geantwortet) oder 0 (stumm oder ausgeschaltet).
+        self._zaehler = 0
+        self._ok = -1
+        # A13: "ausgeschaltet" einmal senden, nicht bei jedem Lauf.
+        self._aus_gemeldet = False
+        # V1/V2: die Stufe dieses Laufs (alarm_level, -1 ohne Aussage).
+        self._stufe = -1
+        self._ereignisse_jetzt = []
+        self._v1 = {"letzte_stufe": None, "letztes_pending": None, "ausfall": False,
+                    "vorwarnung": False, "abschaltung": False, "zuletzt": {}}
+        self._v1_faden = None
+        self._haus_gesendet = None
+        self._haus_zaehler = 0
+        self._haus_raeumen_naechster = 0.0
 
     def _altlast(self):
         """Zurueckbehaltene Altwerte frueherer Fassungen einmal abraeumen.
@@ -677,6 +715,15 @@ class Dienst:
 
     def _senden(self, thema, wert, erzwingen=False):
         if wert is None or str(wert) == "":
+            # A10 (1.2.23): der Fehlwert aus apc_themen.json (-1, -999, "-", data_valid
+            # 0, comm_lost 1) - Hausregel 18.10.2026 "nie nichts". Bis 1.2.22 ging ein
+            # retained Zustand als "-" hinaus und ein Messwert gar nicht.
+            fw = gem.fehlwert(thema)
+        else:
+            fw = None
+        if fw is not None:
+            wert = fw
+        elif wert is None or str(wert) == "":
             if thema in self._retain:
                 # Entscheidung 5: ein retained Zustand ohne Aussage heisst "-".
                 wert = "-"
@@ -708,6 +755,7 @@ class Dienst:
     def _melden(self, titel, text, schwere):
         """Ereignis protokollieren, ablegen, senden und weiterreichen."""
         log.warning("%s - %s", titel, text)
+        self._ereignisse_jetzt.append(titel)
         # C9: bis 1.2.13 blieb ein gescheitertes Anhaengen (volle Karte) ohne
         # jede Spur - das Ereignis fehlte im Reiter Test, und nichts sagte es.
         if not gem.ereignis_anhaengen(time.time(), titel, text):
@@ -797,7 +845,9 @@ class Dienst:
         Neustart des Miniservers hatte der Eingang dann keinen Wert, bis sich
         der Dienst neu anmeldete - das kann Tage dauern (Regeln/07: das
         Lebenszeichen geht bei jedem Durchgang hinaus; Muster Einspeisebremse
-        0.9.20)."""
+        0.9.20). Seit 1.2.23 (N6) ruft es _herzschlag() bei JEDEM Lauf, nicht
+        nur im Vollversand alle 300 s: unter Gateway V2 mit Dedup stand der
+        Eingang nach einem Miniserver-Neustart sonst bis zu 300 s auf 0."""
         jetzt = time.time()
         if jetzt - self._letztes_online < 30:
             return
@@ -808,28 +858,29 @@ class Dienst:
         ergebnis = gem.abfragen(self.cfg)
         werte = ergebnis["werte"]
         jetzt = int(time.time())
-        if erzwingen:
-            self._lebenszeichen()
+        self._ereignisse_jetzt = []
 
         if werte is None:
             self._einmal("abfrage", ergebnis["fehler"], "warning")
+            self._ok = 0
+            self._stufe = -1
             self._senden("valid", "0", erzwingen)
-            # M2 (Entscheidung 5): das Geraet schweigt - die Zustaende der USV
-            # gehen als "-" retained hinaus statt als stehenbleibender Altwert.
-            # Bis 1.2.13 blieb "status ONLINE, data_valid 1, alarm_level 0"
-            # retained stehen, waehrend nur valid=0 fluechtig hinausging (in
-            # WSL gemessen, Befund M2). Die Stammdaten bleiben stehen.
-            for thema in gem.ZUSTAND_THEMEN:
-                self._senden(thema, None, erzwingen)
+            # M2 (Entscheidung 5) und A10 (1.2.23): das Geraet schweigt - die
+            # Zustaende der USV UND die Messwerte gehen mit ihrem Fehlwert hinaus
+            # (data_valid 0, comm_lost 1, Zustaende -1, Messwerte -1/-999, Texte
+            # "-") statt als stehenbleibender Altwert. Die Stammdaten bleiben stehen.
+            self._keine_aussage(erzwingen)
             self._senden("last_error", ergebnis["fehler"].splitlines()[0], erzwingen)
             self._senden("timestamp", jetzt, True)
             self.zustand_schreiben({"zeit": jetzt, "version": gem.version(),
                                     "werte": None, "roh": {}, "zusatz": {},
                                     "fehler": ergebnis["fehler"]})
             self.erster_durchgang = False
+            self._v1_pruefen(None)
             return
 
         self._gemeldet.pop("abfrage", None)
+        self._ok = 1
         neu = werte["status"]
         if self.erster_durchgang:
             self.erstmeldung(werte)
@@ -855,16 +906,17 @@ class Dienst:
         self._senden("valid", "1", erzwingen)
         self._senden("last_error", "", erzwingen)
         # M3: ist die Verbindung zur USV abgerissen (COMMLOST), gehen die
-        # Messwerte mit Zeitbezug NICHT hinaus - "bei Stoerung nur das Signal"
-        # (Regeln/07). apcupsd liefert dann die zuletzt bekannten Zahlen oder
-        # 0; bis 1.2.13 gingen sie bei jedem Vollversand als frisch hinaus,
-        # samt time_left (in WSL gemessen, Befund M3). Aus letzter_stand
-        # genommen, damit sie nach der Stoerung sofort wieder hinausgehen.
+        # Messwerte mit Zeitbezug NICHT als Zahl hinaus - apcupsd liefert dann die
+        # zuletzt bekannten Zahlen oder 0 (in WSL gemessen, Befund M3). Seit 1.2.23
+        # (A10) gehen sie mit ihrem Fehlwert hinaus (-1, internal_temp -999,
+        # last_transfer "-"): bis 1.2.22 ging dann nichts, und unter Gateway V2
+        # stand der letzte Akkustand beliebig lange. letzter_stand traegt den
+        # Fehlwert - nach der Stoerung weicht der neue Wert ab und geht sofort hinaus.
         stoerung = bool(werte.get("comm_lost"))
         zeitbezug = gem.zeitbezug_themen() if stoerung else frozenset()
         for thema, wert in werte.items():
             if thema in zeitbezug:
-                self.letzter_stand.pop(thema, None)
+                self._senden(thema, None, erzwingen)
                 continue
             self._senden(thema, wert, erzwingen)
         for feld, wert in ergebnis["zusatz"].items():
@@ -882,6 +934,199 @@ class Dienst:
             "werte": werte, "roh": ergebnis["roh"],
             "zusatz": ergebnis["zusatz"], "fehler": "",
         })
+        stufe = werte.get("alarm_level")
+        self._stufe = int(stufe) if stufe is not None else -1
+        self._v1_pruefen(werte)
+
+    # ------------------------------------------------------------------
+    # Seit 1.2.23 (Gruppe 16): Fehlwerte, Lebenszeichen, ausgeschaltet, V1, V2
+    # ------------------------------------------------------------------
+
+    def _keine_aussage(self, erzwingen=False):
+        """A10: apcaccess stumm oder Plugin ausgeschaltet - die Zustaende und die
+        Messwerte mit Zeitbezug gehen mit ihrem Fehlwert hinaus (apc_themen.json):
+        data_valid 0, comm_lost 1, on_line/on_battery/replace_battery/alarm_level/
+        shutdown_pending -1, Messwerte -1 (internal_temp -999), Texte "-". Die
+        Stammdaten (Nennwerte, Schwellen, Modell ...) bleiben stehen."""
+        for thema in gem.ZUSTAND_THEMEN:
+            if thema == "data_valid":
+                self._senden(thema, "0", erzwingen)
+            elif thema == "comm_lost":
+                self._senden(thema, "1", erzwingen)
+            else:
+                self._senden(thema, None, erzwingen)
+        for thema in sorted(gem.zeitbezug_themen()):
+            self._senden(thema, None, erzwingen)
+
+    def _ausgeschaltet(self):
+        """A13: das Plugin ist ausgeschaltet (enabled ungleich 1). EINMAL: valid 0,
+        last_error "Plugin ausgeschaltet", alle Zustaende und Messwerte "keine
+        Aussage"; danach nur noch das Lebenszeichen. Der Dienst meldet sich
+        weiter - kein "online 0 und trennen" (das gaebe den falschen Rat "Dienst
+        neu starten", Pruefbericht A13). Status #36 zeigt dann "apcupsd antwortet
+        nicht: Plugin ausgeschaltet"."""
+        self._ok = 0
+        self._stufe = -1
+        self._senden("valid", "0", True)
+        self._senden("last_error", "Plugin ausgeschaltet", True)
+        self._keine_aussage(True)
+        log.info("Plugin ausgeschaltet - Zustaende und Messwerte auf 'keine Aussage' "
+                 "gesendet; das Lebenszeichen laeuft weiter.")
+
+    def _neu_senden(self):
+        """Nach einer Neuverbindung oder einem Neueinlesen: alles neu senden."""
+        self.letzter_stand.clear()
+        self._haus_gesendet = None
+
+    def _herzschlag(self):
+        """E4: Lebenszeichen in Hausform bei JEDEM Lauf (Takt = intervall), auch bei
+        enabled=0: status/zaehler (0-999, laeuft um), status/ts (Unix-Sekunden),
+        status/ok (1/0/-1, Noncached-Gegenstueck: jeder Lauf ein Wert), alle nie
+        retained. Dazu service/online (N6, hoechstens alle 30 s) und - mit dem
+        Haken haus_usv_ein - haus/usv/zaehler (V2)."""
+        self._zaehler = (self._zaehler + 1) % 1000
+        self.mqtt.senden("status/zaehler", str(self._zaehler))
+        self.mqtt.senden("status/ts", str(int(time.time())))
+        self._senden("status/ok", str(self._ok), True)
+        self._lebenszeichen()
+        if self._haus_soll() and self.mqtt.client:
+            self._haus_zaehler = (self._haus_zaehler + 1) % 1000
+            self.mqtt.senden_voll(gem.HAUS_USV_ZAEHLER, self._haus_zaehler, retain=False, qos=0)
+
+    # ---------------- V1: Sprachausgabe (Entwurf 7.1) ----------------
+
+    V1_REIHE = ("abschaltung", "vorwarnung", "ausfall", "rueckkehr")
+
+    def _v1_pruefen(self, werte):
+        """Welcher Anlass gilt in diesem Durchgang? Je Durchgang hoechstens EINE
+        Ansage, die dringendste (abschaltung > vorwarnung > ausfall > rueckkehr).
+        ausfall: Ereignis "Stromausfall" (Wechsel oder beim Start); rueckkehr:
+        "Netz wieder da", NUR wenn vorher in diesem Lauf ein Ausfall angesagt wurde;
+        vorwarnung: alarm_level wechselt auf 2 (von < 2 oder ohne Aussage, auch im
+        ersten Durchgang); abschaltung: shutdown_pending wechselt auf 1. Je Ausfall
+        hoechstens eine Vorwarnung und eine Abschaltungsansage (die Merker fallen mit
+        "Netz wieder da"). COMMLOST und Akkutausch werden nicht angesagt."""
+        v = self._v1
+        stufe = None if werte is None else werte.get("alarm_level")
+        pending = None if werte is None else werte.get("shutdown_pending")
+        kandidaten = []
+        if pending == 1 and v["letztes_pending"] != 1 and not v["abschaltung"]:
+            kandidaten.append("abschaltung")
+        if stufe == 2 and v["letzte_stufe"] not in (2, 3) and not v["vorwarnung"]:
+            kandidaten.append("vorwarnung")
+        if "Stromausfall" in self._ereignisse_jetzt:
+            kandidaten.append("ausfall")
+        rueckkehr = "Netz wieder da" in self._ereignisse_jetzt
+        if rueckkehr and v["ausfall"]:
+            kandidaten.append("rueckkehr")
+        if werte is not None:
+            v["letzte_stufe"] = stufe
+            v["letztes_pending"] = pending
+        gesagt = None
+        for anlass in self.V1_REIHE:
+            if anlass in kandidaten:
+                if self._v1_ansagen(anlass, werte):
+                    gesagt = anlass
+                break
+        if gesagt in ("abschaltung", "vorwarnung", "ausfall"):
+            v["ausfall"] = True
+        if gesagt == "abschaltung":
+            v["abschaltung"] = True
+        if gesagt == "vorwarnung":
+            v["vorwarnung"] = True
+        if rueckkehr:
+            v["ausfall"] = False
+            v["vorwarnung"] = False
+            v["abschaltung"] = False
+
+    def _v1_ansagen(self, anlass, werte):
+        """Eine Ansage im Nebenlauf ueber bin/ap_ansage.php starten. Nur mit
+        tts_mode ungleich aus und gesetztem Anlass-Haken; Sperrzeit je Anlass
+        (ansage_sperre, Werk 600 s); laeuft noch eine, wird diese verworfen.
+        Rueckgabe True, wenn ein Aufruf gestartet wurde."""
+        if self.cfg.get("tts_mode", "aus") in ("", "aus"):
+            return False
+        if self.cfg.get("ansage_" + anlass, "1") != "1":
+            return False
+        jetzt = time.time()
+        sperre = max(60, min(3600, gem.zahl(self.cfg, "ansage_sperre", 600, int)))
+        zuletzt = self._v1["zuletzt"].get(anlass)
+        if zuletzt is not None and jetzt - zuletzt < sperre:
+            log.info("Ansage %s uebersprungen - Sperrzeit (%d s) noch nicht um.", anlass, sperre)
+            return False
+        if self._v1_faden is not None and self._v1_faden.is_alive():
+            log.info("Ansage %s uebersprungen - die vorige laeuft noch.", anlass)
+            return False
+        self._v1["zuletzt"][anlass] = jetzt
+
+        def zahl(k):
+            w = (werte or {}).get(k)
+            try:
+                return int(round(float(w))) if w is not None else -1
+            except (TypeError, ValueError):
+                return -1
+
+        auftrag = json.dumps({"anlass": anlass, "ladung": zahl("battery_charge"),
+                              "rest": zahl("time_left")})
+        bruecke = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ap_ansage.php")
+
+        def arbeit():
+            try:
+                lauf = subprocess.run([ANSAGE_PHP, bruecke, gem.PLUGIN_NAME], input=auftrag,
+                                      text=True, capture_output=True, timeout=ANSAGE_ZEIT)
+                zeile = ((lauf.stdout or "").strip().splitlines() or ["-"])[-1][:200]
+                rc = lauf.returncode
+            except subprocess.TimeoutExpired:
+                zeile, rc = "gescheitert (Zeit, %d s)" % ANSAGE_ZEIT, 1
+            except (OSError, subprocess.SubprocessError) as fehler:
+                zeile, rc = "gescheitert (%s)" % type(fehler).__name__, 1
+            # Nie der Text, nur die ASCII-Zeile von ansage_cli() (Hausregel Nr. 18).
+            log.info("Ansage %s: %s", anlass, zeile)
+            gem._klein_schreiben(gem.ANSAGE_DIENST_DATEI, json.dumps(
+                {"zeit": int(time.time()), "anlass": anlass, "zeile": zeile, "rc": rc}) + "\n", 0o600)
+
+        self._v1_faden = threading.Thread(target=arbeit, name="apc-ansage", daemon=True)
+        self._v1_faden.start()
+        return True
+
+    # ---------------- V2: haus/usv/stufe (Entwurf 7.2) ----------------
+
+    def _haus_soll(self):
+        return self.cfg.get("haus_usv_ein", "0") == "1" and self.cfg.get("mqtt", "1") == "1"
+
+    def _haus_usv(self, erzwingen=False):
+        """haus/usv/stufe (ohne Praefix, retained, qos 1) = alarm_level 0-3, -1 ohne
+        Aussage - bei Aenderung, im Vollversand und nach jeder Neuverbindung. Beim
+        ersten Senden faellt der Merker (das Abraeumen braucht ihn)."""
+        if not self._haus_soll() or not self.mqtt.client:
+            return
+        stufe = self._stufe if self._stufe in (0, 1, 2, 3) else -1
+        if not erzwingen and stufe == self._haus_gesendet:
+            return
+        if self.mqtt.senden_voll(gem.HAUS_USV_THEMA, stufe, retain=True, qos=1):
+            self._haus_gesendet = stufe
+            if not gem.haus_usv_merker_da() and not gem.haus_usv_merker_setzen():
+                log.warning("V2: der Merker %s liess sich nicht schreiben - haus/usv/stufe "
+                            "wuerde beim Ausschalten nicht abgeraeumt.", gem.HAUS_USV_MERKER)
+
+    def _haus_usv_raeumen(self):
+        """Haken oder MQTT aus, aber der Merker liegt: haus/usv/stufe am Broker
+        loeschen und nachlesen (nur genau dieses Thema). Gescheitert: neuer Versuch
+        nach zehn Minuten."""
+        if self._haus_soll() or not gem.haus_usv_merker_da():
+            return
+        jetzt = time.time()
+        if jetzt < self._haus_raeumen_naechster:
+            return
+        erg = gem.haus_usv_leeren()
+        if erg["rc"] == 0:
+            self._haus_gesendet = None
+            log.info("V2: haus/usv/stufe %s.", "geloescht und nachgelesen" if erg["geleert"]
+                     else "lag nicht mehr im Broker - Merker entfernt")
+            return
+        self._haus_raeumen_naechster = jetzt + 600
+        log.warning("V2: haus/usv/stufe nicht abgeraeumt (%s) - neuer Versuch in zehn Minuten.",
+                    erg["grund"] or ", ".join(erg["rest"]))
 
     def _kappen(self):
         """Hoechstens einmal je Stunde nachsehen, ob das Protokoll zu gross ist."""
@@ -905,7 +1150,8 @@ class Dienst:
 
         if self.cfg.get("enabled", "1") != "1":
             log.warning("Das Plugin ist ausgeschaltet. Im Reiter Einstellungen "
-                        "einschalten und speichern.")
+                        "einschalten und speichern. Der Dienst meldet sich weiter "
+                        "(Lebenszeichen) und sendet einmal 'keine Aussage'.")
 
         self._mqtt_stand = self._mqtt_soll()
         # M4: vor dem ersten Senden frueher benutzte Praefixe abraeumen (auch
@@ -925,21 +1171,34 @@ class Dienst:
             # zustande, muessen alle Werte neu hinaus: der Broker kennt sie
             # nicht, und der Doppelt-senden-Filter wuerde sie zurueckhalten.
             if self.cfg.get("mqtt", "1") == "1" and self.mqtt.nachfassen():
-                self.letzter_stand.clear()
+                self._neu_senden()
                 letzte_vollmeldung = 0
             # Hat paho von selbst neu verbunden (_bei_verbindung), gilt
             # dasselbe: der Vollversand geht jetzt hinaus, nicht erst mit der
             # naechsten Vollmeldung.
             if self.mqtt.neu_verbunden.is_set():
                 self.mqtt.neu_verbunden.clear()
-                self.letzter_stand.clear()
+                self._neu_senden()
                 letzte_vollmeldung = 0
 
+            erzwingen = False
             if self.cfg.get("enabled", "1") == "1":
+                self._aus_gemeldet = False
                 erzwingen = (time.time() - letzte_vollmeldung) >= vollmeldung_alle
                 self.durchgang(erzwingen=erzwingen)
                 if erzwingen:
                     letzte_vollmeldung = time.time()
+            elif not self._aus_gemeldet or not self.letzter_stand:
+                # A13 (1.2.23): einmal "ausgeschaltet" (auch direkt nach dem Start
+                # und nach einer Neuverbindung), danach nur das Lebenszeichen.
+                self._ausgeschaltet()
+                self._aus_gemeldet = True
+            # E4/N6: das Lebenszeichen bei JEDEM Lauf, auch bei enabled=0.
+            self._herzschlag()
+            # V2: haus/usv/stufe bei Aenderung und im Vollversand; abraeumen,
+            # sobald der Haken oder MQTT aus ist.
+            self._haus_usv(erzwingen)
+            self._haus_usv_raeumen()
 
             # Nach dem Durchgang: dann kennt letzter_stand die gueltigen
             # Werte, die unmittelbar nach einer Loeschung hinausgehen.
@@ -960,7 +1219,7 @@ class Dienst:
                     log.info("Konfiguration geaendert - wird neu eingelesen")
                     self.config_mtime = cfg_zeit
                     self.cfg, _ = gem.konfiguration_lesen()
-                    self.letzter_stand.clear()
+                    self._neu_senden()
                     intervall = max(5, gem.zahl(self.cfg, "intervall", 30, int))
                     vollmeldung_alle = max(intervall,
                                            gem.zahl(self.cfg, "aktualisierung", 300, int))
@@ -968,7 +1227,7 @@ class Dienst:
                     log.info("general.json geaendert - MQTT-Zugang wird nachgesehen")
                     self.general_mtime = general_zeit
                 if self._mqtt_nachziehen():
-                    self.letzter_stand.clear()
+                    self._neu_senden()
                     letzte_vollmeldung = 0
 
             ende = time.time() + intervall

@@ -10,6 +10,17 @@
 # und genau dafuer war der zweite Pfad gedacht -, lief das Beenden ins Leere.
 PDIR="${3:-apc_ups_ng}"
 
+# ---------- Praefixschutz (1.2.23, Gruppe 16; Hausregel Gruppe 4) ----------
+# plugininstall.pl fuehrt beim Deinstallieren JEDES data/system/uninstall/<name>* aus - auch
+# dieses Skript, wenn ein Plugin deinstalliert wird, dessen NAME ein Praefix von "apc_ups_ng"
+# ist (am Geraet 08.10.2026: zigbee2mqtt riss zigbee2mqttng mit). $2 ist dann der Name DES
+# ANDEREN Plugins. Ein fremder Name heisst: nichts anfassen. Der eigene Name ist apc_ups_ng
+# oder - bei einer Zweitinstallation - der Name, unter dem der Installer dieses Skript ablegt.
+if [ -n "${2:-}" ] && [ "${2:-}" != "apc_ups_ng" ] && [ "${2:-}" != "$(basename "$0")" ]; then
+    echo "<INFO> APC-UPS NG: aufgerufen fuer das Plugin '${2:-}', nicht fuer apc_ups_ng - nichts angefasst."
+    exit 0
+fi
+
 # ---------- Die Wurzel: gelesen, nicht geraten ----------
 # Bis 1.2.12 war BASE das fuenfte Argument oder LBHOMEDIR, ohne Pruefung: fehlten
 # beide, rechnete das Skript mit Pfaden ab der Laufwerkswurzel
@@ -82,7 +93,8 @@ apc_dienste_suchen() {
 # fremd_pid): ein fremder Vorgang, dessen Nummer in der PID-Datei stand, war
 # nach der Deinstallation tot. Ein kill an den Falschen ist nicht
 # rueckgaengig zu machen.
-for PIDF in /run/shm/apc_ups_ng.pid "$LOGDIR/$PDIR/apc_ups_ng.pid"; do
+# A14 (1.2.23): Namen aus dem Ordner (fuer apc_ups_ng byte-gleich wie bisher).
+for PIDF in "/run/shm/$PDIR.pid" "$LOGDIR/$PDIR/$PDIR.pid"; do
     [ -f "$PIDF" ] || continue
     P=$(cat "$PIDF" 2>/dev/null)
     if [ -n "$P" ] && kill -0 "$P" 2>/dev/null && apc_ist_dienst "$P" "$DIENST"; then
@@ -119,7 +131,7 @@ if [ -n "$WAISEN" ]; then
     [ -n "$REST" ] && kill -9 $REST 2>/dev/null
     echo "<INFO> Ein Dienst ohne PID-Datei lief und wurde beendet (PID $(echo $WAISEN))."
 fi
-rm -f /run/shm/apc_ups_ng_status.json /tmp/apc_ups_ng_status.json
+rm -f "/run/shm/${PDIR}_status.json" "/tmp/${PDIR}_status.json"
 
 # ---------- Behaltene MQTT-Themen der Linie abraeumen ----------
 # Bis 1.2.12 blieben Zustand, Modell, Seriennummer und letztes Ereignis nach

@@ -4,6 +4,41 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.23
+
+* **Werte über das MQTT-Gateway in einfache Virtuelle Eingänge:** Die Vorlage für den MQTT-Weg
+  (`VI_APC-UPS-NG_MQTT.xml`, ein Virtueller HTTP-Eingang mit `http://localhost`) entfällt. An ihre Stelle tritt
+  im Reiter „Einbindung in Loxone“ eine **Namenstabelle** (Name, den das Gateway vergibt, Bauform, Bereich,
+  Fehlwert, retained, Haken unter Gateway V2, Stelle auf den Musterseiten) mit Knopf zum Kopieren. Unter
+  Gateway V2 nennt Schritt 2 die 36 Haken der Musterseiten, zwei davon „Noncached“ (`status/ok`,
+  `service/online`). Die Vorlage für den alten XML-Weg bleibt.
+* **-1 statt „-“ oder nichts:** Antwortet apcaccess nicht, ist die Verbindung zur USV abgerissen (COMMLOST)
+  oder das Plugin ausgeschaltet, gehen alle Zahlen- und Digitalthemen als -1 hinaus (Innentemperatur -999,
+  Texte „-“), `data_valid` als 0, `comm_lost` als 1. Fehlt einem Modell ein Wert (Temperatur, Netzfrequenz,
+  Schwellen), ebenso. **Prüfungen in Loxone auf = 0 sehen künftig -1 bzw. -999 (keine Aussage).** Stammdaten
+  (Modell, Nennwerte, Schwellen) bleiben stehen, solange apcupsd schweigt. `event` bleibt bewusst retained:
+  es ist das „letzte Ereignis“.
+* **Lebenszeichen in Hausform:** neu `status/zaehler` (0–999, je Lauf), `status/ok` (1/0/-1) und `status/ts`,
+  auch bei ausgeschaltetem Plugin; `service/online` geht jetzt bei jedem Lauf hinaus. `timestamp` und `valid`
+  bleiben für bestehende Anlagen. Ist das Plugin ausgeschaltet, meldet der Dienst das einmal („Plugin
+  ausgeschaltet“, alle Werte -1) und lebt weiter.
+* **Sprachausgabe bei Stromausfall** (ab Werk aus) über das gemeinsame Sprachmodul (Alexa NG, Chromecast, Music
+  Server, Sonos4Lox, eigene Adresse): Stromausfall, Rückkehr, Vorwarnung und Abschaltung (die letzten beiden
+  dringend), Sperrzeit je Anlass. Lautsprecher und Router hängen oft nicht an der USV – die Benachrichtigungen
+  bleiben der verlässliche Weg.
+* **Haus-Thema `haus/usv/stufe`** (ab Werk aus): die Alarmstufe 0–3 (-1 ohne Aussage) und das Lebenszeichen
+  `haus/usv/zaehler` für andere Plugins; beim Ausschalten und bei der Deinstallation räumt das Plugin das Thema
+  wieder ab.
+* **Lese-Endpunkt hinter einem Schalter:** Die XML-Seite für Loxone antwortet nur mit dem Haken „HTTP-Endpunkt
+  für Loxone annehmen“ (Reiter Einbindung, zugeklappt). Neuinstallation aus; ein Update lässt ihn bei
+  bestehenden Anlagen an. Adresse jetzt mit LAN-Adresse und Webserver-Port.
+* **Berichtigungen:** Konfiguration 0600, die Zweitschrift wird bei jedem Speichern mitgeschrieben; eine eben
+  geheilte Konfiguration überschreibt das Update nicht mehr mit einer kaputten Sicherung; Selbsttest am
+  Webserver-Port; Laufzeitdateien tragen den Ordnernamen; ctype ist nicht mehr nötig; Hilfetext zu
+  „Plugin eingeschaltet“ berichtigt; Sicherungen von 1.2.22 lassen sich weiter zurückspielen.
+* Musterprojekt: beide Seiten auf Virtuelle Eingänge umgestellt, Formeln gegen -1, Statustexte. Gerendert unter
+  PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
+
 ## Neu in 1.2.22
 
 * **Einbindung in Loxone: Eingang En der Analogwertvalidierung nicht negieren (Hinweis und Bild);** ohne diese Korrektur löste die Ausfallmeldung nie aus. Config legt den Eingang En negiert an – die Konstante 1 kam dann als 0 an, und die Validierung #19 der Seite „APC-UPS NG“ prüfte die Zeit Tmc nicht. Wer die Seite schon gebaut hat: Haken bei ‚En‘ entfernen (Eigenschaftsfenster, Parameter). Das Bild zeigt den Eingang jetzt ohne Negation. Plugin-Verhalten unverändert.

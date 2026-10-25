@@ -219,6 +219,49 @@ def eigene_auswahl(praefix):
     return auswahl
 
 
+# V2 (1.2.23, Regeln/07 Nr. 15): Merker "dieser Dienst hat haus/usv/stufe gesendet".
+# Er liegt im Konfigordner wie PRAEFIX_MERKER: die Upgrade-Sicherung nimmt ihn mit,
+# und die Deinstallation liest ihn (apc_lesen.py --mqtt-leeren), bevor LoxBerry den
+# Ordner loescht. Nur mit Merker wird haus/usv/stufe abgeraeumt - eine
+# Zweitinstallation, die nie Anbieter war, loescht das Thema der ersten nicht.
+HAUS_USV_THEMA = "haus/usv/stufe"
+HAUS_USV_ZAEHLER = "haus/usv/zaehler"
+HAUS_USV_MERKER = os.path.join(CONFIG_DIR, "haus_usv_gesendet")
+
+
+def haus_usv_merker_da():
+    return os.path.isfile(HAUS_USV_MERKER)
+
+
+def haus_usv_merker_setzen():
+    return _klein_schreiben(HAUS_USV_MERKER, HAUS_USV_THEMA + "\n", 0o644)
+
+
+def haus_usv_merker_loeschen():
+    try:
+        os.unlink(HAUS_USV_MERKER)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return False
+    return True
+
+
+def haus_usv_leeren():
+    """haus/usv/stufe am Broker loeschen und nachlesen - NUR genau dieses Thema,
+    fremde haus/... (auch haus/usv/<anderes>) bleiben stehen. Rueckgabe wie
+    broker_leeren(); bei rc 0 faellt der Merker."""
+    erg = broker_leeren("haus/usv", lambda t: t == HAUS_USV_THEMA)
+    if erg["rc"] == 0:
+        haus_usv_merker_loeschen()
+    return erg
+
+
+# V1 (1.2.23): die letzte Ansage des Dienstes fuer den Reiter Test - Zeit, Anlass,
+# Antwortzeile von ansage_cli() (ohne Text und Token), 0600.
+ANSAGE_DIENST_DATEI = os.path.join(DATA_DIR, "ansage_dienst.json")
+
+
 # Merker "unter diesen Praefixen koennen behaltene Themen liegen" (M4). Er
 # liegt im Konfigordner: die Upgrade-Sicherung nimmt ihn mit, und die
 # Deinstallation liest ihn, bevor LoxBerry den Ordner loescht. Eine Zeile je
@@ -358,9 +401,12 @@ def _zeitzone_setzen():
 
 ZEITZONE = _zeitzone_setzen()
 
-STATUS_FILE = "/run/shm/apc_ups_ng_status.json"
+# A14 (1.2.23): der Name traegt den Ordner (PLUGIN_NAME). Fuer den Vorgabeordner
+# apc_ups_ng ist er byte-gleich wie bisher; eine Zweitinstallation (apc_ups_ng_<md5[0:3]>,
+# plugininstall.pl) bekommt ihre eigene Datei, statt die der ersten zu ueberschreiben.
+STATUS_FILE = "/run/shm/%s_status.json" % PLUGIN_NAME
 if not os.path.isdir("/run/shm"):
-    STATUS_FILE = "/tmp/apc_ups_ng_status.json"
+    STATUS_FILE = "/tmp/%s_status.json" % PLUGIN_NAME
 
 # Die Ereignisliste liegt neben der Konfiguration, nicht in der Ramdisk unter
 # log/: sie soll einen Neustart des Rechners ueberleben. Genau dann will
@@ -423,6 +469,38 @@ VORGABEN = {
     # Obergrenze der Protokolldatei in Kilobyte. log/plugins liegt auf einer
     # Ramdisk - eine Datei, die niemand kappt, frisst dort Arbeitsspeicher.
     "log_kb":           "512",
+    # --- neu in 1.2.23 (Gruppe 16) -------------------------------------
+    # Lese-Endpunkt (webfrontend/html/index.php) annehmen? Der Dienst braucht
+    # den Schluessel nicht; er steht hier fuer den Listenvergleich. Werk 0,
+    # Bestand beim Update 1 (Lese-Regel in ap_config_read() und im Endpunkt).
+    "endpunkt_ein":     "0",
+    # V1: Block tts der gemeinsamen Sprachausgabe (ansage_vorgaben('aus') der
+    # Stammfassung 1.1.3) - ab Werk aus. Der Dienst liest nur tts_mode.
+    "tts_mode":         "aus",
+    "tts_ip":           "",
+    "tts_port":         "7091",
+    "tts_zones":        "1",
+    "tts_volume":       "8",
+    "tts_lang":         "de",
+    "tts_template":     "",
+    "tts_alexa_geraet": "",
+    "tts_alexa_token":  "",
+    "tts_alexa_laut":   "-1",
+    "tts_google_geraet": "",
+    "tts_google_token": "",
+    "tts_google_laut":  "-1",
+    "tts_sonos_zone":   "",
+    "tts_sonos_laut":   "-1",
+    # V1: welche Anlaesse angesagt werden (wirken nur mit tts_mode ungleich aus)
+    # und die Sperrzeit je Anlass in Sekunden.
+    "ansage_ausfall":     "1",
+    "ansage_rueckkehr":   "1",
+    "ansage_vorwarnung":  "1",
+    "ansage_abschaltung": "1",
+    "ansage_sperre":      "600",
+    # V2: haus/usv/stufe und haus/usv/zaehler an andere Plugins geben
+    # (Regeln/07 Nr. 15) - ab Werk aus.
+    "haus_usv_ein":     "0",
     # Merkmal, das jedes Formular der Oberflaeche mitfuehrt. Es entsteht
     # dort beim ersten Aufruf. Hier steht es, damit es beim Schreiben aus
     # Python nicht verlorengeht - ein Handler, der die Konfiguration neu
@@ -486,12 +564,27 @@ def retain_themen():
     return frozenset(t["schluessel"] for t in themen() if t.get("retain"))
 
 
-# Themen, die nicht aus messwerte() kommen, sondern der Dienst selbst setzt.
-DIENST_THEMEN = ("timestamp", "valid", "service/online", "event", "last_error")
+def fehlwert(thema):
+    """Was der Dienst sendet, wenn der Wert eines Themas fehlt (Feld "fehlwert" in
+    apc_themen.json, seit Fassung 5): "-1", "-999", "-", "0"/"1" (data_valid,
+    comm_lost) oder None (Dienstaussage ohne Fehlwert). EINE Quelle fuer Python und
+    PHP (ap_themen()); A10, Hausregel 18.10.2026 "nie nichts"."""
+    for t in themen():
+        if t["schluessel"] == thema:
+            fw = t.get("fehlwert")
+            return None if fw is None else str(fw)
+    return None
+
+
+# Themen, die nicht aus messwerte() kommen, sondern der Dienst selbst setzt. Seit
+# 1.2.23 (E4) dazu das Lebenszeichen in Hausform status/zaehler, status/ok, status/ts.
+DIENST_THEMEN = ("timestamp", "valid", "service/online", "event", "last_error",
+                 "status/zaehler", "status/ok", "status/ts")
 
 # Die Zustaende der USV, die bei einer gescheiterten Abfrage auf "keine
-# Aussage" fallen (M2, Entscheidung 5): sie gehen dann als "-" retained
-# hinaus, nie als stehenbleibender Altwert. Die Stammdaten (Modell,
+# Aussage" fallen (M2, Entscheidung 5): sie gehen dann mit ihrem Fehlwert
+# hinaus (seit 1.2.23, A10: Zahlen- und Digitalthemen -1, Texte "-", data_valid
+# 0, comm_lost 1 - fehlwert()), nie als stehenbleibender Altwert. Die Stammdaten (Modell,
 # Seriennummer, Einbaudatum, Nennwerte, Abschaltschwellen, Selbsttest) und
 # das letzte Ereignis bleiben stehen - sie aendern sich nicht dadurch, dass
 # apcupsd gerade nicht antwortet.
@@ -502,8 +595,10 @@ ZUSTAND_THEMEN = ("status", "data_valid", "comm_lost", "on_line", "on_battery",
 def zeitbezug_themen():
     """Die Messwerte mit Zeitbezug: was messwerte() liefert und nicht retained
     ist (battery_charge, time_left, line_voltage, load_percent, ...). Bei
-    abgerissener Verbindung zur USV gehen sie nicht hinaus (M3, Regeln/07
-    "bei Stoerung nur das Signal")."""
+    abgerissener Verbindung zur USV und bei stummem apcaccess gehen sie seit
+    1.2.23 mit ihrem Fehlwert hinaus (A10: -1, internal_temp -999,
+    last_transfer "-"); bis 1.2.22 gingen sie dann gar nicht hinaus (M3), und
+    unter Gateway V2 stand der letzte Akkustand beliebig lange."""
     return frozenset(set(messwerte({}, {})) - retain_themen())
 
 
@@ -564,7 +659,10 @@ def konfiguration_schreiben(werte, pfad=None):
             fh.write(inhalt)
             fh.flush()
             os.fsync(fh.fileno())   # ohne fsync liegt der Inhalt nur im Puffer
-        os.chmod(neben, 0o644)
+        # A4 (1.2.23): 0600 wie die Zweitschrift - die Datei traegt formtoken und
+        # die Sprechtoken der Sprachausgabe (Regeln/05). Diese Funktion hat im
+        # Paket keinen Aufrufer (N1); die Rechte stimmen trotzdem.
+        os.chmod(neben, 0o600)
         os.replace(neben, pfad)
         return True
     except OSError:
@@ -928,8 +1026,10 @@ def messwerte(roh, cfg=None):
         "status":                status,
         "data_valid":            0 if verbindung_weg else 1,
         "comm_lost":             1 if verbindung_weg else 0,
-        "on_line":               1 if netz else 0,
-        "on_battery":            1 if akku else 0,
+        # A10 (1.2.23): bei abgerissener Verbindung keine Aussage (None -> -1).
+        # "0" hiesse "weder am Netz noch auf Akku" - eine Falschaussage.
+        "on_line":               None if verbindung_weg else (1 if netz else 0),
+        "on_battery":            None if verbindung_weg else (1 if akku else 0),
         "alarm_level":           stufe,
         "shutdown_pending":      bevor,
         "battery_charge":        ladung,
@@ -943,7 +1043,7 @@ def messwerte(roh, cfg=None):
         "battery_voltage":       wert_zahl(roh, "BATTV"),
         "nominal_battery_volt":  wert_zahl(roh, "NOMBATTV"),
         "internal_temp":         wert_zahl(roh, "ITEMP"),
-        "replace_battery":       1 if "REPLACEBATT" in status else 0,
+        "replace_battery":       None if verbindung_weg else (1 if "REPLACEBATT" in status else 0),
         "battery_age_months":    batteriealter_monate(wert_text(roh, "BATTDATE")),
         "self_test_result":      wert_text(roh, "SELFTEST"),
         "self_test_interval":    wert_text(roh, "STESTI"),
