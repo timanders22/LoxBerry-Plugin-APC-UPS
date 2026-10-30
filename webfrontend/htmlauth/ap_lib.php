@@ -36,8 +36,8 @@
  *    rechnete die Pfade selbst aus, obwohl LoxBerry sie setzt.
  */
 
-/* V1 (1.2.23): die Abschrift der gemeinsamen Sprachausgabe (Stammfassung 1.1.3, byte-gleich) liegt
- * neben dieser Datei. Sie hat einen Schutz gegen doppeltes Laden und antwortet nur als Einstieg
+/* V1 (1.2.23): die Abschrift der gemeinsamen Sprachausgabe (Stammfassung 1.1.3, byte-gleich; seit 1.2.24 Stamm 1.2.1
+ * mit weiteren Ausgabezielen, ap_mit_zielen(), Welle Mehrfach-Ziele) liegt neben dieser Datei. Sie hat einen Schutz gegen doppeltes Laden und antwortet nur als Einstieg
  * mit 403. Die Linie braucht sie fuer den Formularblock, die Pruefung der Schluessel tts_*, den
  * Webport (A2) und die Bruecke bin/ap_ansage.php. */
 if (is_file(__DIR__ . '/sprachausgabe.php')) {
@@ -241,6 +241,13 @@ function ap_defaults()
         'tts_google_laut'  => '-1',
         'tts_sonos_zone'   => '',
         'tts_sonos_laut'   => '-1',
+        // seit 1.2.24 (Modul 1.2.0, Nachtwelle N9): SonoX - dieselben Vorgaben wie ansage_vorgaben('aus')
+        'tts_sonox_raum'   => '',
+        'tts_sonox_laut'   => '-1',
+        'tts_sonox_sprache' => 'de',
+        // Welle Mehrfach-Ziele (1.2.24, Sprachmodul 1.2.1): die weiteren Ausgabeziele als JSON-Liste, leer = keine
+        // (ab Werk aus). ap_tts() liest sie in den Block, ap_tts_cfg() schreibt sie zurueck.
+        'tts_ziele'        => '',
         'ansage_ausfall'     => '1',
         'ansage_rueckkehr'   => '1',
         'ansage_vorwarnung'  => '1',
@@ -1088,6 +1095,139 @@ function ap_t($schluessel)
 }
 
 
+/* ---------------- Gateway V2: Selbsttest der Haken (Nachtwelle N9, 1.2.24) ---------------- */
+
+/**
+ * Die Abos des MQTT-Gateways V2 aus config/system/subscriptions.json (Subscriptions[].Id je Thema, Noncached):
+ * array(Thema => Noncached ja/nein), null = nicht lesbar. Form wie MGiSmart 1.1.28 mg_v2_abos(), Govee 0.9.30
+ * gv_mqtt_v2_haken_lage() und ACTiKamera 1.9.34 (Nachtwelle N4); die Datei liest ap_v2_haken_lage(). Rein.
+ */
+function ap_v2_abos($daten)
+{
+    if (!is_array($daten)) {
+        return null;
+    }
+    $liste = array();
+    foreach (array('Subscriptions', 'subscriptions') as $s) {
+        if (isset($daten[$s]) && is_array($daten[$s])) {
+            $liste = $daten[$s];
+            break;
+        }
+    }
+    $abo = array();
+    foreach ($liste as $e) {
+        if (!is_array($e)) {
+            continue;
+        }
+        $id = '';
+        foreach (array('Id', 'id', 'Topic', 'topic') as $k) {
+            if (isset($e[$k]) && is_string($e[$k])) {
+                $id = trim($e[$k]);
+                break;
+            }
+        }
+        if ($id === '') {
+            continue;
+        }
+        $nc = false;
+        foreach (array('Noncached', 'noncached') as $k) {
+            if (isset($e[$k]) && is_scalar($e[$k])) {
+                $nc = ($e[$k] === true || in_array(strtolower(trim((string) $e[$k])), array('1', 'true', 'yes', 'on'), true));
+                break;
+            }
+        }
+        $abo[$id] = !empty($abo[$id]) || $nc;
+    }
+    return $abo;
+}
+
+/**
+ * Soll gegen Ist, rein (liest nichts): array(1|0, fehlt[], noncached_fehlt[], noncached_zu_viel[], angehakt, soll).
+ * Soll je Zeile array('thema' => volles Thema, 'name' => Gateway-Name, 'noncached' => bool). Noncached wird in
+ * beide Richtungen verglichen: fehlt es, reicht das Gateway einen gleichen Wert nach einem Neustart des Miniservers
+ * nicht weiter; steht es zu viel, geht jeder Wert erneut an den Miniserver.
+ */
+function ap_v2_haken_abgleich(array $soll, array $abo)
+{
+    $fehlt = array();
+    $nc_fehlt = array();
+    $nc_zuviel = array();
+    $da = 0;
+    foreach ($soll as $e) {
+        if (!array_key_exists($e['thema'], $abo)) {
+            $fehlt[] = $e['name'];
+            continue;
+        }
+        $da++;
+        if ($e['noncached'] && !$abo[$e['thema']]) {
+            $nc_fehlt[] = $e['name'];
+        } elseif (!$e['noncached'] && $abo[$e['thema']]) {
+            $nc_zuviel[] = $e['name'];
+        }
+    }
+    return array(($fehlt || $nc_fehlt || $nc_zuviel) ? 0 : 1, $fehlt, $nc_fehlt, $nc_zuviel, $da, count($soll));
+}
+
+/**
+ * Das Soll fuer den Selbsttest: ap_v2_haken() - DIESELBE Liste wie die Haken im Reiter Einbindung in Loxone, Schritt 2,
+ * und die Spalte V2 der Namenstabelle (Regeln/07; 36 Haken der zwei Musterseiten, die Textthemen darunter mit ihren
+ * Virtuellen Texteingaengen #33-#35 und Seite 2). Noncached wie dort: status/ok und service/online.
+ */
+function ap_v2_haken_soll($cfg)
+{
+    $p = ap_praefix($cfg);
+    $aus = array();
+    foreach (ap_v2_haken() as $k => $nc) {
+        $aus[] = array('thema' => $p . '/' . $k, 'name' => ap_gateway_name($p, $k), 'noncached' => (bool) $nc);
+    }
+    return $aus;
+}
+
+/**
+ * Selbsttestzeile "Gateway V2: sind alle Datenpunkte der Hakenliste angehakt?" (Nachtwelle N9, Vorschrift Punkt 4):
+ * array(1|0|2, Text ohne Markup). 1 alle Haken da und Noncached wie in der Hakenliste; 0 es fehlt ein Haken oder
+ * Noncached stimmt nicht (mit Namen); 2 trifft nicht zu (MQTT dieses Plugins aus, Gateway V1) oder nicht
+ * feststellbar (Fassung 0, keine Wurzel, subscriptions.json nicht lesbar). Liest nur.
+ */
+function ap_v2_haken_lage($cfg = null)
+{
+    if (!is_array($cfg)) {
+        list($cfg) = ap_config_read();
+    }
+    if (ap_cfg($cfg, 'mqtt', '1') !== '1') {
+        return array(2, ap_t('TEST.V2_AUS'));
+    }
+    $fassung = (int) ap_gateway_fassung();
+    $home = (string) ap_paths()['home'];
+    if ($fassung === 0 || $home === '') {
+        return array(2, ap_t('TEST.V2_UNKLAR'));
+    }
+    if ($fassung < 2) {
+        return array(2, ap_t('TEST.V2_V1'));
+    }
+    $abo = ap_v2_abos(@json_decode((string) @file_get_contents($home . '/config/system/subscriptions.json'), true));
+    if ($abo === null) {
+        return array(2, ap_t('TEST.V2_UNKLAR'));
+    }
+    $liste = ap_v2_haken_soll($cfg);
+    if (!$liste) {
+        return array(2, ap_t('TEST.V2_LEER'));   // leere Hakenliste: kein Urteil (Hausform wie N7)
+    }
+    list($ok, $fehlt, $nc_fehlt, $nc_zuviel, $da, $soll) = ap_v2_haken_abgleich($liste, $abo);
+    $txt = sprintf(ap_t('TEST.V2_ZAHL'), $da, $soll);
+    if ($fehlt) {
+        $txt .= ' ' . sprintf(ap_t('TEST.V2_FEHLT'), implode(', ', array_slice($fehlt, 0, 12))
+            . (count($fehlt) > 12 ? ' …' : ''));
+    }
+    if ($nc_fehlt) {
+        $txt .= ' ' . sprintf(ap_t('TEST.V2_NC_FEHLT'), implode(', ', $nc_fehlt));
+    }
+    if ($nc_zuviel) {
+        $txt .= ' ' . sprintf(ap_t('TEST.V2_NC_ZUVIEL'), implode(', ', $nc_zuviel));
+    }
+    return array($ok, $txt);
+}
+
 /**
  * Die Fassung des LoxBerry-MQTT-Gateways - 0 heisst "nicht feststellbar".
  *
@@ -1402,6 +1542,25 @@ function ap_wert_pruefen($k, $v)
     if (is_int($v) && isset($g[$k])) {
         $v = (string) $v;
     }
+    /* Welle Mehrfach-Ziele (1.2.24): tts_ziele traegt die Liste der weiteren Ziele als JSON (leer = keine). Geprueft
+     * vom Modul mit der Modusliste dieser Linie (ansage_wert_pruefen, Schluessel ziele) - im Formularweg und beim
+     * Zurueckspielen; uebernommen in fester Form. Eine zuerst geladene aeltere Abschrift kennt die Liste nicht. */
+    if ($k === 'tts_ziele') {
+        if (!is_string($v)) {
+            return array(false, '', sprintf(ap_t('EINST.W_TYP'), $name, gettype($v)));
+        }
+        $v = trim($v);
+        if ($v === '') {
+            return array(true, '', '');
+        }
+        $zl = json_decode($v, true);
+        $tg = 'TTS_ZIELE';
+        $tp = (is_array($zl) && ap_mit_zielen()) ? ansage_wert_pruefen(array('ziele' => $zl), $tg, ap_ansage_modi()) : null;
+        if ($tp === null) {
+            return array(false, '', sprintf(ap_t('EINST.W_ANSAGE'), $name, ansage_kennung_text($tg, ap_ansage_k())));
+        }
+        return array(true, $tp['ziele'] ? (string) json_encode($tp['ziele'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '', '');
+    }
     /* V1 (1.2.23): die Schluessel des Blocks tts prueft die Stammfassung (ansage_wert_pruefen) -
      * dieselbe Pruefung wie das Formular (ansage_formular_lesen) und das Zurueckspielen. */
     if (strpos((string) $k, 'tts_') === 0 && function_exists('ansage_vorgaben')
@@ -1658,7 +1817,8 @@ function ap_eingaben_felder($formular)
                             'benachrichtigung', 'email', 'email_an', 'haus_usv_ein',
                             'ansage_ausfall', 'ansage_rueckkehr', 'ansage_vorwarnung',
                             'ansage_abschaltung', 'ansage_sperre'),
-                            function_exists('ansage_x2_felder') ? ansage_x2_felder(ap_ansage_opt()) : array()),
+                            function_exists('ansage_x2_felder') ? ansage_x2_felder(ap_ansage_opt()) : array(),
+                            ap_ziele_x2_felder()),
         'mqtt'     => array('mqtt', 'themenpraefix', 'rohfelder'),
         'endpunkt' => array('endpunkt_ein'),
     );
@@ -1861,13 +2021,58 @@ function ap_endpunkt_ein($cfg)
     return ap_roh($cfg, 'endpunkt_ein') === '1';
 }
 
-/* ---------------- V1: Sprachausgabe (Stammfassung sprachausgabe.php 1.1.3) ---------------- */
+/* ---------------- V1: Sprachausgabe (Stammfassung sprachausgabe.php, seit 1.2.24 Stamm 1.2.1 mit weiteren Ausgabezielen,
+ * ap_mit_zielen(), Welle Mehrfach-Ziele) ---------------- */
 
 /** Erlaubte Ausgabearten: alle des Moduls ausser 'audioserver' - der Original-Audioserver hat keine
- *  HTTP-Schnittstelle (Kopf der Stammfassung); dort sagt Loxone ueber die Benachrichtigungen an. */
+ *  HTTP-Schnittstelle (Kopf der Stammfassung); dort sagt Loxone ueber die Benachrichtigungen an.
+ *  Seit 1.2.24 (Nachtwelle N9, Modul 1.2.0, Pflegewelle 22) dazu SonoX - nur ab Modul 1.1.4, damit eine zuerst
+ *  geladene aeltere Abschrift nichts anbietet, was sie nicht kann (ungemessen, kein Sonos im Haus). Weitere
+ *  Ausgabeziele (Tabelle, 'ziele') seit 1.2.24 mit Stamm 1.2.1 - ap_mit_zielen() unten; ohne Tabelle wie 1.1.4. */
 function ap_ansage_modi()
 {
-    return array('aus', 'musicserver', 'ms4h', 'custom', 'alexang', 'cc4lox', 'sonos4lox');
+    $m = array('aus', 'musicserver', 'ms4h', 'custom', 'alexang', 'cc4lox', 'sonos4lox');
+    if (defined('ANSAGE_FASSUNG') && version_compare(ANSAGE_FASSUNG, '1.1.4', '>=')) {
+        $m[] = 'sonox';
+    }
+    return $m;
+}
+
+/** Welle Mehrfach-Ziele (Sprachmodul 1.2.1): bietet diese Linie die Tabelle der weiteren Ausgabeziele an? Nur, wenn die
+ *  geladene Abschrift sie kann - laden zwei Abschriften im selben Prozess, gilt die zuerst geladene. */
+function ap_mit_zielen() {
+    return version_compare(ANSAGE_FASSUNG, '1.2.0', '>=') && function_exists('ansage_ziele_html')
+        && function_exists('ansage_ziele_pruefen') && function_exists('ansage_testknoepfe_html');
+}
+
+/** Welle Mehrfach-Ziele (Sprachmodul 1.2.1), X-2 mit flachen Schluesseln (name.N): die Felder der Tabelle heissen im
+ *  Formular name[N] (N = 2..6, ansage_ziel_feldnamen()). ap_ziele_x2_name() macht daraus name.N (Beanstandung und
+ *  Markierung), ap_ziele_x2_post() aus den gesammelten Eingaben wieder das POST der Tabelle (ziele_post). */
+function ap_ziele_x2_name($n) {
+    return is_string($n) ? (string) preg_replace('/^(tts_ziel_[a-z]+)\[([2-9])\]\z/', '$1.$2', $n) : $n;
+}
+function ap_ziele_x2_post(array $werte) {
+    $p = array();
+    foreach ($werte as $k => $v) {
+        if (is_string($v) && preg_match('/^(tts_ziel_[a-z]+)\.([2-9])\z/', (string) $k, $m)) { $p[$m[1]][(int) $m[2]] = $v; }
+    }
+    return isset($p['tts_ziel_art']) ? $p : null;
+}
+
+/** Welle Mehrfach-Ziele (1.2.24): die Felder der Tabelle in der Einmalmeldung (X-2), flach name.N fuer N = 2..6 -
+ *  nur, wenn die geladene Abschrift die Tabelle kann. */
+function ap_ziele_x2_felder()
+{
+    $f = array();
+    if (ap_mit_zielen()) {
+        for ($i = 2; $i <= 6; $i++) {
+            foreach (array('tts_ziel_art', 'tts_ziel_wo', 'tts_ziel_laut', 'tts_ziel_sprache', 'tts_ziel_ein',
+                           'tts_ziel_loeschen') as $n) {
+                $f[] = $n . '.' . $i;
+            }
+        }
+    }
+    return $f;
 }
 
 function ap_ansage_opt()
@@ -1884,18 +2089,32 @@ function ap_tts($cfg)
             $w = isset($cfg['tts_' . $s]) ? (string) $cfg['tts_' . $s] : (string) $vorgabe;
             $tts[$s] = is_int($vorgabe) && preg_match('/^-?[0-9]{1,6}\z/', $w) ? (int) $w : $w;
         }
+        /* Welle Mehrfach-Ziele (1.2.24): die weiteren Ziele stehen als JSON-Liste in tts_ziele (leer = keine). Eine
+         * Liste, die kein JSON ist, bleibt draussen - die Sicherung nennt sie dann im Kopf (X-3). */
+        $zr = isset($cfg['tts_ziele']) ? trim((string) $cfg['tts_ziele']) : '';
+        $zl = ($zr !== '') ? json_decode($zr, true) : null;
+        if (is_array($zl) && $zl !== array()) {
+            $tts['ziele'] = $zl;
+        }
         list($tts) = ansage_vervollstaendigen($tts, 'aus');
     }
     return $tts;
 }
 
-/** Der Block tts zurueck in die Schluessel tts_* (Zeichenketten) fuer ap_config_write(). */
+/** Der Block tts zurueck in die Schluessel tts_* (Zeichenketten) fuer ap_config_write(). Seit 1.2.24 (Welle
+ *  Mehrfach-Ziele) die Liste der weiteren Ziele als JSON in tts_ziele - leer, wenn der Block keine traegt (eine
+ *  geleerte Tabelle loescht die gespeicherte Liste). */
 function ap_tts_cfg($tts)
 {
     $aus = array();
     foreach ((array) $tts as $s => $w) {
+        if ($s === 'ziele') {
+            continue;
+        }
         $aus['tts_' . $s] = (string) $w;
     }
+    $aus['tts_ziele'] = (is_array($tts) && isset($tts['ziele']) && is_array($tts['ziele']) && $tts['ziele'] !== array())
+        ? (string) json_encode(array_values($tts['ziele']), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '';
     return $aus;
 }
 
@@ -1934,6 +2153,18 @@ function ap_ansage_text($anlass, $ladung = -1, $rest = -1)
             return ap_t('ANSAGE_TEXT.ABSCHALTUNG');
     }
     return '';
+}
+
+/** Welle Mehrfach-Ziele (1.2.24): eine Zeile der Oberflaeche ins Protokoll des Dienstes (apc_ups_ng.log) - die
+ *  Testansage nennt dort ihr Ergebnis wie in den anderen Linien, nur die Kurzform ohne Text und Token (Nr. 18).
+ *  Legt keinen Ordner an (Archivmodus, Pruefstand ohne Protokollordner: nichts). */
+function ap_log($text)
+{
+    $d = ap_paths()['logdir'];
+    if (is_dir($d)) {
+        @file_put_contents($d . '/apc_ups_ng.log', date('Y-m-d H:i:s') . ' [INFO] Oberflaeche: ' . $text . "\n",
+                           FILE_APPEND | LOCK_EX);
+    }
 }
 
 /** Die letzte Ansage des Dienstes (data/<ordner>/ansage_dienst.json) oder null. */

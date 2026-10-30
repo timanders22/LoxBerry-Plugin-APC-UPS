@@ -4,6 +4,34 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.24
+
+Pflegefassung der Nachtwelle (29.10.2026) mit der Welle Mehrfach-Ziele, ohne Änderung an Werten, Themen oder Meldungen:
+
+* **Gemeinsame Sprachausgabe 1.2.1** (bisher 1.1.3), dazu die Ausgabeart **SonoX** (ab Werk nicht gewählt, ungemessen
+  – kein Sonos im Haus; Sonos4Lox gab es schon). **SonoX schickt den Ansagetext an Google** und antwortet erst nach der
+  Wiedergabe. Jede Ansage dauert höchstens 15 s – seit 1.2.1 auch mit einem einzigen Ziel und mit Sonos (bisher bis
+  30 s); der Dienst wartet höchstens 20 s. Die Einstellung trägt dafür den neuen Schlüssel `tts_ziele` (leer = keine
+  weiteren Ziele).
+* **Mehrere Lautsprecher gleichzeitig (Sprachmodul 1.2.1):** Unter der Ausgabeart (jetzt „Ziel 1“) nimmt die Tabelle
+  *Weitere Ausgabeziele (gleichzeitig)* bis zu fünf weitere Ziele auf – etwa Google-Lautsprecher (Chromecast 4 Lox NG)
+  in einem Raum und Amazon Echo (Alexa-NG) in einem anderen neben dem Loxone Music Server. Die Ansage geht an alle
+  eingeschalteten Ziele zugleich (eine Ansage dauert so lange wie das langsamste Ziel, höchstens 15 s);
+  scheitert eines, sprechen die anderen. Protokoll und Reiter Test nennen jedes Ziel, im Reiter Test gibt es je Ziel
+  eine Testansage. Die bestehende Einstellung ist unverändert Ziel 1; ohne weitere Ziele verhält sich alles wie in
+  1.2.23. Antwort an Loxone, MQTT-Themen und Brückenbefehl `ansage` bleiben, wie sie sind.
+* **Vor einem Zurückgehen** auf 1.2.23 oder älter die weiteren Ziele entfernen: ältere Fassungen kennen die Liste nicht
+  und fielen beim Laden auf die Werkseinstellung der Sprachausgabe zurück.
+* **Reiter Test, neue Zeile „Gateway V2: sind alle Datenpunkte der Hakenliste angehakt?“** Unter MQTT-Gateway V2
+  liest das Plugin `config/system/subscriptions.json` und nennt jeden der 36 Datenpunkte (Reiter *Einbindung in
+  Loxone*, Schritt 2), der dort nicht angehakt ist, und jeden, bei dem „Noncached“ nicht stimmt (`status/ok` und
+  `service/online` brauchen es, die übrigen nicht). Unter Gateway V1 und bei ausgeschalteter MQTT-Veröffentlichung
+  heißt die Zeile „trifft nicht zu“.
+* **Kopf, Kachel MQTT:** Groß steht weiter der Schalter dieses Plugins, klein darunter jetzt der Autostart des
+  MQTT-Gateways (ein/aus, „nicht feststellbar“ ohne MQTT-Abschnitt in der LoxBerry-Konfiguration) – wie in den übrigen
+  Plugins.
+* Eine Befehlsbrücke hat diese Linie weiterhin nicht (Entscheidung Gruppe 16).
+
 ## Neu in 1.2.23
 
 * **Werte über das MQTT-Gateway in einfache Virtuelle Eingänge:** Die Vorlage für den MQTT-Weg

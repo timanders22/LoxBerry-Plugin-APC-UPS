@@ -383,6 +383,11 @@ function ap_test_selbstpruefung($cfg, $w, $pid, $alter, $broker, $autostart)
         ap_e($nok ? sprintf(ap_t('TEST.A_NAMEN'), $nn, $nh, $nnc)
                   : sprintf(ap_t('TEST.A_NAMEN_FALSCH'), implode(', ', $nabw))));
 
+    // Nachtwelle N9 (1.2.24): stehen unter MQTT-Gateway V2 die 36 Haken mit dem richtigen Noncached? Liest
+    // config/system/subscriptions.json; unter V1 und bei ausgeschaltetem MQTT ein Punkt.
+    list($v2s, $v2t) = ap_v2_haken_lage($cfg);
+    ap_pruefzeile(ap_t('TEST.F_V2_HAKEN'), $zaehle($v2s === 2 ? null : ($v2s === 1)), ap_e($v2t));
+
     // Sprachausgabe (V1): die Zeile des Moduls; Ausgabeart aus -> Punkt "aus (ab Werk)". Andere
     // Plugins werden nur gefragt, wenn dieser Reiter serverseitig der offene ist (hier immer).
     if (function_exists('ansage_pruefzeile')) {

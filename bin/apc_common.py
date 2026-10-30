@@ -475,7 +475,7 @@ VORGABEN = {
     # Bestand beim Update 1 (Lese-Regel in ap_config_read() und im Endpunkt).
     "endpunkt_ein":     "0",
     # V1: Block tts der gemeinsamen Sprachausgabe (ansage_vorgaben('aus') der
-    # Stammfassung 1.1.3) - ab Werk aus. Der Dienst liest nur tts_mode.
+    # Stammfassung, seit 1.2.24 Fassung 1.2.0) - ab Werk aus. Der Dienst liest nur tts_mode.
     "tts_mode":         "aus",
     "tts_ip":           "",
     "tts_port":         "7091",
@@ -491,6 +491,13 @@ VORGABEN = {
     "tts_google_laut":  "-1",
     "tts_sonos_zone":   "",
     "tts_sonos_laut":   "-1",
+    # seit 1.2.24 (Modul 1.2.0, Nachtwelle N9): SonoX - wie ap_defaults() und ansage_vorgaben('aus')
+    "tts_sonox_raum":   "",
+    "tts_sonox_laut":   "-1",
+    "tts_sonox_sprache": "de",
+    # Welle Mehrfach-Ziele (1.2.24, Sprachmodul 1.2.1): die weiteren Ausgabeziele als JSON-Liste, leer = keine -
+    # wie ap_defaults(); der Dienst liest sie nicht, er behaelt sie nur beim Schreiben.
+    "tts_ziele":        "",
     # V1: welche Anlaesse angesagt werden (wirken nur mit tts_mode ungleich aus)
     # und die Sperrzeit je Anlass in Sekunden.
     "ansage_ausfall":     "1",

@@ -8,7 +8,7 @@
  *    "rest": <Zahl oder -1>}
  *
  * Der Dienst (bin/apc_service.py) ist in Python geschrieben; die gemeinsame Sprachausgabe
- * des Hauses (sprachausgabe.php, Stammfassung 1.1.3, Nr. 36 b) gibt es nur in PHP. Diese
+ * des Hauses (sprachausgabe.php, Stammfassung 1.2.1 seit 1.2.24, Nr. 36 b) gibt es nur in PHP. Diese
  * Datei laedt die Bibliothek der Linie (ap_lib.php) und die Abschrift der Sprachausgabe aus
  * <Wurzel>/webfrontend/htmlauth/plugins/<ordner>/, baut den Block tts (ap_tts()), den
  * Kontext (ap_ansage_k()) und den Satz (ap_ansage_text(), aus den Sprachdateien) und ruft
@@ -101,7 +101,13 @@ $rest = (isset($auftrag['rest']) && is_int($auftrag['rest'])) ? $auftrag['rest']
 list($cfg) = ap_config_read();
 $text = ap_ansage_text($auftrag['anlass'], $ladung, $rest);
 $dringend = ($auftrag['anlass'] === 'vorwarnung' || $auftrag['anlass'] === 'abschaltung');
+/* Nachtwelle N9 (1.2.24, Entwurf Sprachmodul 1.2.0 E-E7 [V], N3): der Dienst beendet diese Bruecke nach
+ * ANSAGE_ZEIT = 20 s (bin/apc_service.py); jede Einzelfrist des Moduls (10 s, Sonos4Lox/SonoX 30 s) wird deshalb
+ * auf 20 - 5 = 15 s gekappt. Seit Stamm 1.2.1 (Welle Mehrfach-Ziele, Befund B3) gilt 'frist' in jedem Weg - mit
+ * EINEM Ziel und mit den weiteren Zielen der Tabelle, die gleichzeitig sprechen. Die Antwortzeile traegt dann
+ * zusaetzlich ;ZIELE=x/y; der Dienst nimmt die Zeile nur ins Protokoll (B8). */
 list($rc, $zeile) = ansage_cli(json_encode(array('text' => $text, 'dringend' => $dringend),
-                                           JSON_UNESCAPED_UNICODE), ap_tts($cfg), ap_ansage_k());
+                                           JSON_UNESCAPED_UNICODE), ap_tts($cfg),
+                               array_merge(ap_ansage_k(), array('frist' => 15)));
 echo $zeile, "\n";
 exit($rc);

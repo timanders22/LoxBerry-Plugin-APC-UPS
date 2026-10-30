@@ -250,15 +250,25 @@ if ($ap_ist_post && isset($_POST['test'])) {
 /* ============ Testansage (V1, seit 1.2.23) ============
  * Spricht den Testtext des Moduls ueber die gespeicherte Ausgabeart; Rueckmeldung ohne Text und
  * Token (ansage_kennung_text). Orange (Regeln/04: Testansagen loesen etwas aus). */
-if ($ap_ist_post && isset($_POST['ansage_test'])) {
-    $ap_ak = ap_ansage_k();
-    $ap_ar = ansage_testansage(ap_tts($ap_cfg), $ap_ak);
-    if ($ap_ar['stand'] === 1) {
-        $ap_hinweise[] = ap_t('EINST.ANSAGE_TEST_OK');
-    } elseif ($ap_ar['stand'] === -1) {
-        $ap_hinweise[] = sprintf(ap_t('EINST.ANSAGE_TEST_NICHTS'), ansage_kennung_text($ap_ar['kennung'], $ap_ak));
+/* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): die Knoepfe "Testansage an Ziel n" schicken ansage_test_ziel=n - es spricht
+ * nur dieses Ziel; der bisherige Knopf spricht an alle Ziele gleichzeitig. Eine unbrauchbare Nummer spricht nichts. */
+if ($ap_ist_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel']))) {
+    $ap_tk = ap_ansage_k();
+    $ap_tnur = (isset($_POST['ansage_test_ziel']) && ap_mit_zielen()) ? ansage_test_ziel($_POST) : 0;
+    if (isset($_POST['ansage_test_ziel']) && $ap_tnur === 0) {
+        $ap_tr = array('stand' => 0, 'kennung' => 'ZIEL_UNBEKANNT|-', 'art' => '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
+    } elseif ($ap_tnur >= 1) {
+        $ap_tr = ansage_testansage(ap_tts($ap_cfg), $ap_tk, $ap_tnur);
     } else {
-        $ap_fehler[] = sprintf(ap_t('EINST.ANSAGE_TEST_FEHL'), ansage_kennung_text($ap_ar['kennung'], $ap_ak));
+        $ap_tr = ansage_testansage(ap_tts($ap_cfg), $ap_tk);
+    }
+    ap_log('Testansage' . ($ap_tnur >= 1 ? ' an Ziel ' . $ap_tnur : '') . ': ' . ansage_kurz($ap_tr));
+    if ($ap_tr['stand'] === 1) {
+        $ap_hinweise[] = ap_t('EINST.ANSAGE_TEST_OK');
+    } elseif ($ap_tr['stand'] === -1) {
+        $ap_hinweise[] = sprintf(ap_t('EINST.ANSAGE_TEST_NICHTS'), ansage_kennung_text($ap_tr['kennung'], $ap_tk));
+    } else {
+        $ap_fehler[] = sprintf(ap_t('EINST.ANSAGE_TEST_FEHL'), ansage_kennung_text($ap_tr['kennung'], $ap_tk));
     }
 }
 
@@ -309,9 +319,11 @@ if ($ap_ist_post && isset($_POST['save'])) {
      * einer Meldung. */
     $ap_tm = array();
     $ap_tb = array();
-    $ap_tts_neu = ansage_formular_lesen($_POST, ap_tts($ap_cfg), $ap_tm, $ap_tb, ap_ansage_opt(), ap_ansage_k());
+    $ap_thinw = array();     // Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Hinweise des Moduls, die das Speichern nicht verhindern
+    $ap_tts_neu = ansage_formular_lesen($_POST, ap_tts($ap_cfg), $ap_tm, $ap_tb,
+        array('modi' => ap_ansage_modi(), 'ziele' => ap_mit_zielen()), ap_ansage_k(), $ap_thinw);
     foreach ($ap_tm as $ap_x) { $ap_mangel[] = $ap_x['text']; }
-    foreach ($ap_tb as $ap_x) { $ap_falsch[] = $ap_x; }
+    foreach ($ap_tb as $ap_x) { $ap_falsch[] = ap_ziele_x2_name($ap_x); }     // 1.2.24: name[N] der Tabelle -> name.N
     if ($ap_mangel) {
         $ap_fehler[] = ap_t('EINST.NICHT_GESPEICHERT');
         foreach ($ap_mangel as $ap_m) {
@@ -322,9 +334,17 @@ if ($ap_ist_post && isset($_POST['save'])) {
         foreach (ansage_x2_felder(ap_ansage_opt()) as $ap_k) {
             if (isset($_POST[$ap_k]) && is_string($_POST[$ap_k])) { $ap_zurueck[$ap_k] = $_POST[$ap_k]; }
         }
+        // Welle Mehrfach-Ziele (1.2.24): die Tabelle reist flach als name.N (ap_ziele_x2_felder(), ap_ziele_x2_post()).
+        foreach (ap_ziele_x2_felder() as $ap_k) {
+            $ap_zt = explode('.', $ap_k);
+            if (isset($_POST[$ap_zt[0]][$ap_zt[1]]) && is_array($_POST[$ap_zt[0]]) && is_string($_POST[$ap_zt[0]][$ap_zt[1]])) {
+                $ap_zurueck[$ap_k] = $_POST[$ap_zt[0]][$ap_zt[1]];
+            }
+        }
         $ap_eingaben = ap_eingaben_merken('settings', $ap_zurueck, $ap_falsch);
     } elseif (ap_config_write(array_merge($ap_cfg, $ap_gut, ap_tts_cfg($ap_tts_neu)))) {
         $ap_saved = true;
+        foreach ($ap_thinw as $ap_th) { $ap_hinweise[] = $ap_th['text']; }     // Welle Mehrfach-Ziele: erst nach dem Speichern
         if (isset($GLOBALS['ap_zweitschrift_ok']) && $GLOBALS['ap_zweitschrift_ok'] === false) {
             $ap_hinweise[] = ap_t('EINST.ZWEITSCHRIFT_FEHLT');
         }
@@ -695,10 +715,16 @@ $ap_kachel(ap_t('ALLGEMEIN.PLUGIN'),
     ap_cfg($ap_cfg, 'enabled', '1') === '1'
         ? '<span class="sm-an">' . ap_e(ap_t('ALLGEMEIN.EIN')) . '</span>'
         : '<span class="sm-aus">' . ap_e(ap_t('ALLGEMEIN.AUS')) . '</span>');
+/* Nachtwelle N9 (1.2.24): Kopfkachel MQTT in der Hausform (Regeln/04, Vorbild MGiSmart 1.1.28, Raumklima
+   0.11.22) - gross der Schalter DIESES Plugins, klein der Autostart des Gateways aus ap_gateway_autostart()
+   (null = kein MQTT-Abschnitt in general.json: "nicht feststellbar", nicht "aus"). */
 $ap_kachel('MQTT',
-    ap_cfg($ap_cfg, 'mqtt', '1') === '1'
+    (ap_cfg($ap_cfg, 'mqtt', '1') === '1'
         ? '<span class="sm-an">' . ap_e(ap_t('ALLGEMEIN.EIN')) . '</span>'
-        : '<span class="sm-aus">' . ap_e(ap_t('ALLGEMEIN.AUS')) . '</span>');
+        : '<span class="sm-aus">' . ap_e(ap_t('ALLGEMEIN.AUS')) . '</span>')
+    . '<span class="sm-hilfe" style="display:block;font-size:0.6em;font-weight:400;">'
+    . ap_e(sprintf(ap_t('ALLGEMEIN.KACHEL_MQTT_HILFE'), $ap_autost === null ? ap_t('ALLGEMEIN.UNBEKANNT')
+        : ($ap_autost ? ap_t('ALLGEMEIN.EIN') : ap_t('ALLGEMEIN.AUS')))) . '</span>');
 if ($ap_w) {
     $ap_kachel(ap_t('ALLGEMEIN.USV'), ap_e($ap_w['status']));
     $ap_kachel(ap_t('ALLGEMEIN.STAND_SEKUNDEN'), (int) $ap_alter);
@@ -867,14 +893,18 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
 </div>
 
 <?php /* V1 (1.2.23, Entwurf 7.1): Sprachausgabe ueber die Stammfassung sprachausgabe.php 1.1.3 - ab Werk
-       aus. Der Formularblock kommt aus dem Modul (ansage_formular_html), Haken und Sperrzeit aus der Linie. */ ?>
+       aus. Der Formularblock kommt aus dem Modul (ansage_formular_html), Haken und Sperrzeit aus der Linie.
+       Seit 1.2.24 Stamm 1.2.1 mit der Tabelle der weiteren Ausgabeziele (Welle Mehrfach-Ziele). */ ?>
 <h2><?php echo ap_e(ap_t('EINST.ANSAGE_UEBERSCHRIFT')); ?></h2>
 <div class="sm-warnung"><?php echo ap_t('EINST.ANSAGE_LAUTSPRECHER'); ?></div>
 <?php echo ansage_formular_html(ap_tts($ap_cfg), array(
     'w' => function ($n, $g) { return ap_fwert('settings', $n, $g); },
-    'm' => function ($n) { return ap_fmark('settings', $n); },
+    'm' => function ($n) { return ap_fmark('settings', ap_ziele_x2_name($n)); },     // 1.2.24: name[N] -> name.N
     'c' => function ($n, $g) { return ap_fwert('settings', $n, $g ? '1' : '') === '1'; },
-    'modi' => ap_ansage_modi()), ap_ansage_k()); ?>
+    'modi' => ap_ansage_modi(),
+/* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Tabelle der weiteren Ausgabeziele; nach einer Beanstandung traegt sie das Eingetippte. */
+'ziele' => ap_mit_zielen(),
+'ziele_post' => (is_array($ap_eingaben) && $ap_eingaben['formular'] === 'settings') ? ap_ziele_x2_post($ap_eingaben['werte']) : null), ap_ansage_k()); ?>
 <div class="sm-hilfe"><?php echo ap_t('EINST.ANSAGE_AUDIOSERVER'); ?></div>
 <div class="sm-feld">
 <label><?php echo ap_e(ap_t('EINST.ANSAGE_ANLAESSE')); ?></label>
@@ -908,6 +938,9 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
 <input data-role="none" type="hidden" name="ap_form" value="<?php echo ap_e($ap_formtoken); ?>">
 <div class="sm-knopfreihe">
 <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ansage_test" value="1"><?php echo ap_e(ap_t('EINST.K_TESTANSAGE')); ?></button>
+<?php /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): je weiteres Ziel ein Knopf "Testansage an Ziel n (Geraet (Plugin))";
+   ohne weitere Ziele nichts. */
+if (ap_mit_zielen()) { echo ansage_testknoepfe_html(ap_tts($ap_cfg), ap_ansage_k(), array('klasse' => 'sm-btn sm-b-aktion')); } ?>
 </div>
 </form>
 
