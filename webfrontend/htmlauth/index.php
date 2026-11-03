@@ -258,9 +258,9 @@ if ($ap_ist_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_z
     if (isset($_POST['ansage_test_ziel']) && $ap_tnur === 0) {
         $ap_tr = array('stand' => 0, 'kennung' => 'ZIEL_UNBEKANNT|-', 'art' => '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
     } elseif ($ap_tnur >= 1) {
-        $ap_tr = ansage_testansage(ap_tts($ap_cfg), $ap_tk, $ap_tnur);
+        $ap_tr = ansage_testansage(ap_ansage_vor_ort(), $ap_tk, $ap_tnur);
     } else {
-        $ap_tr = ansage_testansage(ap_tts($ap_cfg), $ap_tk);
+        $ap_tr = ansage_testansage(ap_ansage_vor_ort(), $ap_tk);
     }
     ap_log('Testansage' . ($ap_tnur >= 1 ? ' an Ziel ' . $ap_tnur : '') . ': ' . ansage_kurz($ap_tr));
     if ($ap_tr['stand'] === 1) {
@@ -309,7 +309,7 @@ if ($ap_ist_post && isset($_POST['save'])) {
         $eingabe[$ap_k] = isset($_POST[$ap_k]) ? '1' : '0';
     }
     foreach (array('intervall', 'aktualisierung', 'host', 'vorwarn_min',
-                   'vorwarn_prozent', 'log_kb', 'email_an', 'ansage_sperre') as $ap_k) {
+                   'vorwarn_prozent', 'log_kb', 'email_an') as $ap_k) {
         $ap_v = isset($_POST[$ap_k]) ? $_POST[$ap_k] : '';
         $eingabe[$ap_k] = is_string($ap_v) ? trim($ap_v) : $ap_v;
     }
@@ -321,7 +321,8 @@ if ($ap_ist_post && isset($_POST['save'])) {
     $ap_tb = array();
     $ap_thinw = array();     // Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Hinweise des Moduls, die das Speichern nicht verhindern
     $ap_tts_neu = ansage_formular_lesen($_POST, ap_tts($ap_cfg), $ap_tm, $ap_tb,
-        array('modi' => ap_ansage_modi(), 'ziele' => ap_mit_zielen()), ap_ansage_k(), $ap_thinw);
+        array('modi' => ap_ansage_modi(), 'ziele' => ap_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), ap_ansage_k(), $ap_thinw);
+    list($ap_rneu) = ansage_regeln_formular($_POST, ap_ansage_regeln($ap_cfg), array(), $ap_tm, $ap_tb, ap_ansage_k());     // 1.2.25: Wann gesprochen wird (Stamm)
     foreach ($ap_tm as $ap_x) { $ap_mangel[] = $ap_x['text']; }
     foreach ($ap_tb as $ap_x) { $ap_falsch[] = ap_ziele_x2_name($ap_x); }     // 1.2.24: name[N] der Tabelle -> name.N
     if ($ap_mangel) {
@@ -334,6 +335,10 @@ if ($ap_ist_post && isset($_POST['save'])) {
         foreach (ansage_x2_felder(ap_ansage_opt()) as $ap_k) {
             if (isset($_POST[$ap_k]) && is_string($_POST[$ap_k])) { $ap_zurueck[$ap_k] = $_POST[$ap_k]; }
         }
+        foreach (ansage_regeln_x2_felder() as $ap_k) {     // 1.2.25
+            if ($ap_k === 'ansage_ruhe_ein') { $ap_zurueck[$ap_k] = isset($_POST[$ap_k]) ? '1' : '0'; }
+            elseif (isset($_POST[$ap_k]) && is_string($_POST[$ap_k])) { $ap_zurueck[$ap_k] = $_POST[$ap_k]; }
+        }
         // Welle Mehrfach-Ziele (1.2.24): die Tabelle reist flach als name.N (ap_ziele_x2_felder(), ap_ziele_x2_post()).
         foreach (ap_ziele_x2_felder() as $ap_k) {
             $ap_zt = explode('.', $ap_k);
@@ -342,7 +347,7 @@ if ($ap_ist_post && isset($_POST['save'])) {
             }
         }
         $ap_eingaben = ap_eingaben_merken('settings', $ap_zurueck, $ap_falsch);
-    } elseif (ap_config_write(array_merge($ap_cfg, $ap_gut, ap_tts_cfg($ap_tts_neu)))) {
+    } elseif (ap_config_write(array_merge($ap_cfg, $ap_gut, ap_tts_cfg($ap_tts_neu), array('ansage_ruhe_ein' => !empty($ap_rneu['nachtruhe']) ? '1' : '0', 'ansage_ruhe_von' => (string) $ap_rneu['von'], 'ansage_ruhe_bis' => (string) $ap_rneu['bis'], 'ansage_sperre_min' => (string) (int) $ap_rneu['sperre_min'])))) {
         $ap_saved = true;
         foreach ($ap_thinw as $ap_th) { $ap_hinweise[] = $ap_th['text']; }     // Welle Mehrfach-Ziele: erst nach dem Speichern
         if (isset($GLOBALS['ap_zweitschrift_ok']) && $GLOBALS['ap_zweitschrift_ok'] === false) {
@@ -905,6 +910,11 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
 /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Tabelle der weiteren Ausgabeziele; nach einer Beanstandung traegt sie das Eingetippte. */
 'ziele' => ap_mit_zielen(),
 'ziele_post' => (is_array($ap_eingaben) && $ap_eingaben['formular'] === 'settings') ? ap_ziele_x2_post($ap_eingaben['werte']) : null), ap_ansage_k()); ?>
+<?= ansage_regeln_html(ap_ansage_regeln($ap_cfg), array(), array(), array(
+    'w' => function ($n, $g) { return ap_fwert('settings', $n, $g); },
+    'm' => function ($n) { return ap_fmark('settings', $n); },
+    'c' => function ($n, $g) { return ap_fwert('settings', $n, $g ? '1' : '') === '1'; },
+    'token_vor_ort' => true), ap_ansage_k()) ?>
 <div class="sm-hilfe"><?php echo ap_t('EINST.ANSAGE_AUDIOSERVER'); ?></div>
 <div class="sm-feld">
 <label><?php echo ap_e(ap_t('EINST.ANSAGE_ANLAESSE')); ?></label>
@@ -915,10 +925,6 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
 <?php } ?>
 <div class="sm-hilfe"><?php echo ap_t('EINST.ANSAGE_ANLAESSE_HILFE'); ?></div>
 </div>
-<div class="sm-feld">
-<label><?php echo ap_e(ap_t('EINST.ANSAGE_SPERRE')); ?></label>
-<input data-role="none"<?php echo ap_fmark('settings', 'ansage_sperre'); ?> type="number" name="ansage_sperre" min="60" max="3600" value="<?php echo ap_e(ap_fwert('settings', 'ansage_sperre', ap_cfg($ap_cfg, 'ansage_sperre', '600'))); ?>">
-<div class="sm-hilfe"><?php echo ap_t('EINST.ANSAGE_SPERRE_HILFE'); ?></div>
 </div>
 
 <div class="sm-legende">
@@ -941,6 +947,7 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
 <?php /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): je weiteres Ziel ein Knopf "Testansage an Ziel n (Geraet (Plugin))";
    ohne weitere Ziele nichts. */
 if (ap_mit_zielen()) { echo ansage_testknoepfe_html(ap_tts($ap_cfg), ap_ansage_k(), array('klasse' => 'sm-btn sm-b-aktion')); } ?>
+<?= ap_ansage_lage_html() ?>
 </div>
 </form>
 

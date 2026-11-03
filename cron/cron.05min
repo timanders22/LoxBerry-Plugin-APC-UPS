@@ -171,13 +171,18 @@ done
 # Deshalb wird der Benutzer jetzt GEMESSEN, nicht angenommen.
 MELDUNG="APC-UPS NG: der Dienst lief nicht mehr und wurde nachgestartet."
 LOG="REPLACELBPLOGDIR/apc_ups_ng.log"
+# 1.2.25 (Nachzug 01.11.2026): ist die Datei nicht schreibbar, braeche die Umlenkung den Befehl ab, BEVOR er startet -
+# bis 1.2.24 kein Start und keine Spur. Dann geht die Ausgabe nach /dev/null. Eigene Variable: die Dateinamen
+# dienen unten auch anderem. Im su-Zweig prueft der Benutzer selbst, root kaeme ja immer durch.
 WER=$(id -un 2>/dev/null)
 
 if [ "$WER" = "loxberry" ]; then
     # A8 (1.2.23): python3 ausdruecklich, wie im Zweig darunter und in daemon/daemon.
-    nohup python3 "$DIENST" >> "$LOG" 2>&1 &
+    ZIEL="$LOG"
+    ( : >>"$ZIEL" ) 2>/dev/null || ZIEL=/dev/null
+    nohup python3 "$DIENST" >> "$ZIEL" 2>&1 &
 elif [ "$(id -u 2>/dev/null)" = "0" ]; then
-    su -s /bin/sh loxberry -c "nohup python3 '$DIENST' >> '$LOG' 2>&1 &" >/dev/null 2>&1
+    su -s /bin/sh loxberry -c "Z='$LOG'; ( : >>\"\$Z\" ) 2>/dev/null || Z=/dev/null; nohup python3 '$DIENST' >> \"\$Z\" 2>&1 &" >/dev/null 2>&1
 else
     MELDUNG="APC-UPS NG: der Waechter laeuft als '$WER' - weder loxberry noch root. Es wird nicht nachgestartet."
     command -v logger >/dev/null 2>&1 && logger -t apc_ups_ng "$MELDUNG"

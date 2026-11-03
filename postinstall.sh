@@ -242,8 +242,8 @@ netz_zurueck() {
 # <name>.alt gelegt und EINMAL gemeldet; die Oberflaeche und der Dienst lesen
 # .alt nie, die Deinstallation raeumt es ab.
 APC_MARKE="$NETZ_BASE/data/plugins/$NETZ_PDIR.upgrade_laeuft"
-# Paketsummen (N7): 1.2.23 vorn, 1.2.22 und frueher (db6b2b24) dahinter.
-AP_VORGABE_SUMMEN="9cbfe4b6fc20b98f228d80a729a765c1f972a76bbb9e42739dc0a47de938e2ba db6b2b24b51a7b599d77f56ea00e03a765b25fad706bb220f2f21a3a20efeda2"
+# Paketsummen (N7): 1.2.25 vorn, 1.2.23 und 1.2.24, 1.2.22 und frueher (db6b2b24) dahinter.
+AP_VORGABE_SUMMEN="abb708ddcfac480e9bd11733fed1710bff6ffc158a116a09219f1d58d0d8ae61 9cbfe4b6fc20b98f228d80a729a765c1f972a76bbb9e42739dc0a47de938e2ba db6b2b24b51a7b599d77f56ea00e03a765b25fad706bb220f2f21a3a20efeda2"
 if [ -f "$APC_MARKE" ]; then
     netz_zurueck "apc_ups_ng.cfg" "$AP_VORGABE_SUMMEN"
 else

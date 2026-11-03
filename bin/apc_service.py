@@ -1040,24 +1040,15 @@ class Dienst:
             v["abschaltung"] = False
 
     def _v1_ansagen(self, anlass, werte):
-        """Eine Ansage im Nebenlauf ueber bin/ap_ansage.php starten. Nur mit
-        tts_mode ungleich aus und gesetztem Anlass-Haken; Sperrzeit je Anlass
-        (ansage_sperre, Werk 600 s); laeuft noch eine, wird diese verworfen.
+        """Eine Ansage im Nebenlauf ueber bin/ap_ansage.php starten. Nur mit gesetztem
+        Anlass-Haken; Ausgabeart, Nachtruhe, Sperre und Schalter prueft seit 1.2.25 die
+        Bruecke (gemeinsame Regeln). Laeuft noch ein Aufruf, wird dieser verworfen.
         Rueckgabe True, wenn ein Aufruf gestartet wurde."""
-        if self.cfg.get("tts_mode", "aus") in ("", "aus"):
-            return False
         if self.cfg.get("ansage_" + anlass, "1") != "1":
-            return False
-        jetzt = time.time()
-        sperre = max(60, min(3600, gem.zahl(self.cfg, "ansage_sperre", 600, int)))
-        zuletzt = self._v1["zuletzt"].get(anlass)
-        if zuletzt is not None and jetzt - zuletzt < sperre:
-            log.info("Ansage %s uebersprungen - Sperrzeit (%d s) noch nicht um.", anlass, sperre)
             return False
         if self._v1_faden is not None and self._v1_faden.is_alive():
             log.info("Ansage %s uebersprungen - die vorige laeuft noch.", anlass)
             return False
-        self._v1["zuletzt"][anlass] = jetzt
 
         def zahl(k):
             w = (werte or {}).get(k)

@@ -391,14 +391,14 @@ function ap_test_selbstpruefung($cfg, $w, $pid, $alter, $broker, $autostart)
     // Sprachausgabe (V1): die Zeile des Moduls; Ausgabeart aus -> Punkt "aus (ab Werk)". Andere
     // Plugins werden nur gefragt, wenn dieser Reiter serverseitig der offene ist (hier immer).
     if (function_exists('ansage_pruefzeile')) {
-        list($ast, $atext) = ansage_pruefzeile(ap_tts($cfg), true, ap_ansage_k());
+        list($ast, $atext) = ansage_pruefzeile(ap_ansage_pruefblock(), true, ap_ansage_k());
         ap_pruefzeile(ap_t('TEST.F_ANSAGE'), $zaehle($ast === 1 ? true : ($ast === 0 ? false : null)), $atext);
         $anl = array();
         foreach (array('ausfall', 'rueckkehr', 'vorwarnung', 'abschaltung') as $an) {
             if (ap_cfg($cfg, 'ansage_' . $an, '1') === '1') { $anl[] = ap_t('EINST.ANSAGE_' . strtoupper($an)); }
         }
         $ad = ap_ansage_dienst();
-        $atx = sprintf(ap_t('TEST.A_ANLAESSE'), $anl ? implode(', ', $anl) : '-', ap_cfg($cfg, 'ansage_sperre', '600'));
+        $atx = sprintf(ap_t('TEST.A_ANLAESSE'), $anl ? implode(', ', $anl) : '-', (string) (ap_ansage_regeln($cfg)['sperre_min'] * 60));
         $atx .= ' ' . ($ad ? sprintf(ap_t('TEST.A_ANSAGE_DIENST'), $ad['anlass'],
                                      isset($ad['zeile']) ? $ad['zeile'] : '-', max(0, time() - (int) $ad['zeit']))
                            : ap_t('TEST.A_ANSAGE_DIENST_KEINE'));
@@ -793,7 +793,7 @@ function ap_test_ausfuehren($was)
             // Der Pluginordner als drittes Argument, wie der Dienst ihn
             // mitgibt - sonst griff apc_notify.php auf den festen Namen zurueck.
             @exec('php ' . escapeshellarg($skript) . ' 6 '
-                . escapeshellarg(ap_t('TEST.ME_TEXT')) . ' '
+                . ap_shell_arg(ap_t('TEST.ME_TEXT')) . ' '
                 . escapeshellarg($p['plugin'])
                 . ' 2>&1', $out, $rc);
             return array(ap_t('TEST.K_MELDEN'),

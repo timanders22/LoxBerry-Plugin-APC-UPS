@@ -98,16 +98,18 @@ if (!is_array($auftrag) || !isset($auftrag['anlass']) || !in_array($auftrag['anl
 }
 $ladung = (isset($auftrag['ladung']) && is_int($auftrag['ladung'])) ? $auftrag['ladung'] : -1;
 $rest = (isset($auftrag['rest']) && is_int($auftrag['rest'])) ? $auftrag['rest'] : -1;
-list($cfg) = ap_config_read();
-$text = ap_ansage_text($auftrag['anlass'], $ladung, $rest);
-$dringend = ($auftrag['anlass'] === 'vorwarnung' || $auftrag['anlass'] === 'abschaltung');
-/* Nachtwelle N9 (1.2.24, Entwurf Sprachmodul 1.2.0 E-E7 [V], N3): der Dienst beendet diese Bruecke nach
- * ANSAGE_ZEIT = 20 s (bin/apc_service.py); jede Einzelfrist des Moduls (10 s, Sonos4Lox/SonoX 30 s) wird deshalb
- * auf 20 - 5 = 15 s gekappt. Seit Stamm 1.2.1 (Welle Mehrfach-Ziele, Befund B3) gilt 'frist' in jedem Weg - mit
- * EINEM Ziel und mit den weiteren Zielen der Tabelle, die gleichzeitig sprechen. Die Antwortzeile traegt dann
- * zusaetzlich ;ZIELE=x/y; der Dienst nimmt die Zeile nur ins Protokoll (B8). */
-list($rc, $zeile) = ansage_cli(json_encode(array('text' => $text, 'dringend' => $dringend),
-                                           JSON_UNESCAPED_UNICODE), ap_tts($cfg),
-                               array_merge(ap_ansage_k(), array('frist' => 15)));
-echo $zeile, "\n";
-exit($rc);
+/* bis 1.2.24 hiess dieses Feld $cfg: das LoxBerry-SDK ueberschreibt ein globales $cfg beim ersten Lesen von general.json (Ausfall MGiSmart 01.11.2026). */
+list($ap_lauf_cfg) = ap_config_read();
+$ap_lauf_tts = ap_tts($ap_lauf_cfg);
+if ($ap_lauf_tts['mode'] === 'aus') {
+    echo "ANSAGE;STAND=-1;KENNUNG=AUS\n";
+    exit(3);
+}
+/* 1.2.25: Nachtruhe, Sperre und Schalter stehen im Stamm, gesprochen wird in einem eigenen Vorgang. Stromausfall, Vorwarnung und Abschaltung sprechen auch nachts;
+ * "Netz wieder da" nur, wenn der Ausfall gesprochen hat, und nicht in der Nachtruhe. */
+$ap_e = array('schluessel' => $auftrag['anlass'], 'text' => ap_ansage_text($auftrag['anlass'], $ladung, $rest), 'dringend' => $auftrag['anlass'] !== 'rueckkehr');
+if ($auftrag['anlass'] === 'rueckkehr') { $ap_e['nur_nach'] = 'ausfall'; }
+ap_ansage_token_pflegen($ap_lauf_cfg);
+ap_ansage_legen(array($ap_e));
+echo "ANSAGE;STAND=1;KENNUNG=GELEGT\n";
+exit(0);

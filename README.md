@@ -4,6 +4,17 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.25
+
+**Ab dieser Fassung sind die Sprachansagen ab Werk an, auch nach einem Update, wenn Sie die Ausgabeart nie gespeichert haben.** Eine gespeicherte Einstellung bleibt, wie sie ist, auch „aus“. **Ausschalten:** Reiter *Einstellungen*, Abschnitt Sprachausgabe, Ausgabeart **„aus“** wählen und speichern; das bleibt auch nach jedem weiteren Update aus.
+
+* **Was angesagt wird:** Stromausfall, Vorwarnung und Abschaltung (alle drei dringend, also auch nachts) und Netz wieder da (nur, wenn der Ausfall angesagt wurde), jeder Anlass mit eigenem Haken. Die bisherige Sperrzeit in Sekunden gilt weiter, bis Sie den Block speichern.
+* **Wohin:** ab Werk zugleich Loxone Music Server (braucht seine Adresse), Google-Lautsprecher über Chromecast4lox (braucht dort ein Standardgerät oder hier den Namen) und Amazon Echo über Alexa-NG. Ein Ziel, das nicht bereitsteht, wird ohne Fehler übergangen; der Reiter *Test* sagt, was ihm fehlt. Das Sprechtoken der beiden Plugins müssen Sie nicht abschreiben: Es wird übernommen, in der Konfiguration gespeichert und nachgezogen; ein von Hand eingetragenes bleibt.
+* **Wann nicht:** Nachtruhe 22 bis 7 Uhr (einstellbar, wird nicht nachgeholt; Dringendes spricht trotzdem), dieselbe Ansage höchstens einmal in 30 Minuten (einstellbar) und solange Loxone das retained MQTT-Thema `haus/ansage/ruhe` auf 1 setzt (das gilt auch für Dringendes). Die Testansage im Reiter *Test* spricht immer.
+* **Der Minutenlauf wartet nicht auf Lautsprecher:** Gesprochen wird in einem eigenen Vorgang.
+* **Lautsprecher an der USV:** Bei einem Stromausfall hängen Lautsprecher und Router oft nicht an der USV; die Benachrichtigungen bleiben der verlässliche Weg.
+
+
 ## Neu in 1.2.24
 
 Pflegefassung der Nachtwelle (29.10.2026) mit der Welle Mehrfach-Ziele, ohne Änderung an Werten, Themen oder Meldungen:

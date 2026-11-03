@@ -226,7 +226,7 @@ function ap_defaults()
         // (Lese-Regel in ap_config_read(), Bestand bis 1.2.22 hatte den Endpunkt immer offen).
         'endpunkt_ein'     => '0',
         // V1: Block tts der gemeinsamen Sprachausgabe (ansage_vorgaben('aus'), Stammfassung 1.1.3).
-        'tts_mode'         => 'aus',
+        'tts_mode'         => 'musicserver',     // 1.2.25: ab Werk EIN; ap_tts() nimmt Google und Echo dazu, solange nichts eingerichtet ist
         'tts_ip'           => '',
         'tts_port'         => '7091',
         'tts_zones'        => '1',
@@ -253,6 +253,12 @@ function ap_defaults()
         'ansage_vorwarnung'  => '1',
         'ansage_abschaltung' => '1',
         'ansage_sperre'      => '600',
+        // 1.2.25: Wann gesprochen wird (Stamm). ansage_sperre_min leer = aus ansage_sperre; der Vermerk reist nie in einer Sicherung.
+        'ansage_ruhe_ein'    => '1',
+        'ansage_ruhe_von'    => '22:00',
+        'ansage_ruhe_bis'    => '07:00',
+        'ansage_sperre_min'  => '',
+        'ansage_token_herkunft' => '',
         // V2: haus/usv/stufe an andere Plugins geben (Regeln/07 Nr. 15), ab Werk aus.
         'haus_usv_ein'     => '0',
         // Merkmal gegen fremde Absender. Entsteht beim ersten Aufruf der
@@ -260,6 +266,17 @@ function ap_defaults()
         // Bestand uebernimmt statt die Konfiguration neu zu bauen.
         'formtoken'        => '',
     );
+}
+
+/**
+ * Ein Argument fuer die Schale anfuehren, Byte fuer Byte: fuer Themen, Werte und Texte, nicht fuer Pfade.
+ * Bis 1.2.24 stand hier escapeshellarg(). Es verwirft unter PHP 7.4 jedes Byte, das im LC_CTYPE kein gueltiges Zeichen ist; Apache startet mit LANG=C, eine
+ * Befehlsbruecke ohne LANG: aus "Kueche" mit Umlaut wurde "Kche", ohne Fehler (am Geraet gemessen 01.11.2026). setlocale() fehlt, wo keine UTF-8-Locale
+ * erzeugt ist, und aendert basename() und PCRE. Einfache Anfuehrungszeichen sind fuer sh und dash byte-erhaltend; ein Nullbyte kann kein Argument tragen.
+ */
+function ap_shell_arg($s)
+{
+    return "'" . str_replace("'", "'\\''", str_replace("\0", '', (string) $s)) . "'";
 }
 
 /** Rueckgabe: array($werte, $altesFormat) */
@@ -272,7 +289,8 @@ function ap_config_read()
         return array($werte, $alt);
     }
     $gesehen = array();
-    foreach (preg_split('/\R/', (string) @file_get_contents($file)) as $zeile) {
+    $ap_roh_cfg = (string) @file_get_contents($file);
+    foreach (preg_split('/\R/', $ap_roh_cfg) as $zeile) {
         $t = trim($zeile);
         if ($t === '' || $t[0] === ';' || $t[0] === '#' || $t[0] === '[') {
             continue;
@@ -296,6 +314,10 @@ function ap_config_read()
      * Konfiguration: Werk 0. */
     if (empty($gesehen['endpunkt_ein'])) {
         $werte['endpunkt_ein'] = '1';
+    }
+    /* 1.2.25: bis 1.2.24 trug die mitgelieferte Vorlage tts_mode=aus. Hat die Oberflaeche die Datei nie geschrieben, hat auch niemand etwas gewaehlt: nie gesetzt = ab Werk EIN. */
+    if ($werte['tts_mode'] === 'aus' && strpos($ap_roh_cfg, 'Geschrieben von der Plugin-Oberflaeche') === false) {
+        $werte['tts_mode'] = 'musicserver';
     }
     return array($werte, $alt);
 }
@@ -1326,7 +1348,7 @@ function ap_sicherung_lesen($roh, $bisher = null)
         if ($k !== '' && $k[0] === '_') {
             continue;
         }
-        if ($k === 'formtoken') {
+        if ($k === 'formtoken' || $k === 'ansage_token_herkunft') {     // 1.2.25: der Vermerk kommt nie aus einer Datei
             continue;
         }
         if (in_array($k, $geheim, true)) {
@@ -1370,7 +1392,7 @@ function ap_sicherung_lesen($roh, $bisher = null)
 function ap_sicherung_schluessel()
 {
     return array_values(array_diff(array_keys(ap_defaults()),
-                                   array('formtoken', 'tts_alexa_token', 'tts_google_token')));
+                                   array('formtoken', 'tts_alexa_token', 'tts_google_token', 'ansage_token_herkunft')));
 }
 
 /** Die Fassung aus der Plugindatenbank von LoxBerry, '' wenn nicht feststellbar. */
@@ -1560,6 +1582,18 @@ function ap_wert_pruefen($k, $v)
             return array(false, '', sprintf(ap_t('EINST.W_ANSAGE'), $name, ansage_kennung_text($tg, ap_ansage_k())));
         }
         return array(true, $tp['ziele'] ? (string) json_encode($tp['ziele'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '', '');
+    }
+    /* 1.2.25: die Regeln (flach). */
+    if (in_array((string) $k, array('ansage_ruhe_ein', 'ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min', 'ansage_token_herkunft'), true)) {
+        $ap_rg = function ($k, $w) {
+        if ($k === 'ansage_token_herkunft') { return $w === '' || is_array(json_decode($w, true)); }
+        if ($k === 'ansage_ruhe_ein') { return $w === '0' || $w === '1'; }
+        if ($k === 'ansage_ruhe_von' || $k === 'ansage_ruhe_bis') { return is_string($w) && (bool) preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]\z/', $w); }
+        if ($k === 'ansage_sperre_min') { return is_string($w) && ($w === '' || ((bool) preg_match('/^[0-9]{1,3}\z/', $w) && (int) $w >= 5 && (int) $w <= 240)); }
+            return false;
+        };
+        if (is_string($v) && $ap_rg((string) $k, trim($v))) { return array(true, trim($v), ''); }
+        return array(false, '', sprintf(ap_t('EINST.W_ANSAGE'), (string) $k, (string) $k));
     }
     /* V1 (1.2.23): die Schluessel des Blocks tts prueft die Stammfassung (ansage_wert_pruefen) -
      * dieselbe Pruefung wie das Formular (ansage_formular_lesen) und das Zurueckspielen. */
@@ -1816,8 +1850,9 @@ function ap_eingaben_felder($formular)
                             'vorwarn_min', 'vorwarn_prozent', 'log_kb',
                             'benachrichtigung', 'email', 'email_an', 'haus_usv_ein',
                             'ansage_ausfall', 'ansage_rueckkehr', 'ansage_vorwarnung',
-                            'ansage_abschaltung', 'ansage_sperre'),
+                            'ansage_abschaltung'),
                             function_exists('ansage_x2_felder') ? ansage_x2_felder(ap_ansage_opt()) : array(),
+                            function_exists('ansage_regeln_x2_felder') ? ansage_regeln_x2_felder() : array(),
                             ap_ziele_x2_felder()),
         'mqtt'     => array('mqtt', 'themenpraefix', 'rohfelder'),
         'endpunkt' => array('endpunkt_ein'),
@@ -2097,6 +2132,11 @@ function ap_tts($cfg)
             $tts['ziele'] = $zl;
         }
         list($tts) = ansage_vervollstaendigen($tts, 'aus');
+        /* 1.2.25: Music Server ohne Adresse und ohne weitere Ziele = nie eingerichtet: ab Werk mit Google und Echo. Eine eingetragene Adresse oder Tabelle bleibt. */
+        if ($tts['mode'] === ansage_werk_modus() && (string) $tts['ip'] === '' && empty($tts['ziele'])) {
+            $ap_w = ansage_werk_block();
+            $tts['ziele'] = $ap_w['ziele'];
+        }
     }
     return $tts;
 }
@@ -2125,6 +2165,7 @@ function ap_ansage_k()
     $p = ap_paths();
     $g = $p['home'] !== '' ? $p['home'] . '/config/system/general.json' : '';
     return array(
+        'werk' => ansage_werk_modus(),
         'port'     => ap_webport(),
         'sslport'  => ($g !== '' && function_exists('ansage_sslport')) ? ansage_sslport($g) : 0,
         'home'     => $p['home'],
@@ -2133,6 +2174,191 @@ function ap_ansage_k()
         't'        => function ($s) { return ap_t($s); },
         'absender' => 'apc_ups_ng',
     );
+}
+
+/** Die Konfiguration fuer die Sprachansagen. */
+function ap_ansage_conf()
+{
+    list($c) = ap_config_read();
+    return $c;
+}
+
+/* ---------------- Sprachansagen: Regeln aus dem Stamm (1.2.25, Welle S2, Stamm sprachausgabe.php 1.3.2) ----------------
+ *
+ * Nachtruhe, Sperre und Schalter "Ansagen aus" stehen im Stamm. Ab Werk EIN: ansage_werk_block() in den Vorgaben, also nur fuer einen
+ * nie gespeicherten Block; ein gespeicherter bleibt, auch 'aus'. Ein Minutenlauf und ein Dienst sprechen nie selbst: Sie legen den Anlass
+ * in <Daten>/ansage_warte.json, ein abgekoppelter Sender (php -r, eigene Sperre) spricht und wartet auf die Lautsprecher.
+ */
+
+/** So alt darf ein wartender Anlass werden (nach einem Update oder Hang wird nichts Aufgestautes angesagt). */
+if (!defined('AP_ANSAGE_HOECHSTALTER')) { define('AP_ANSAGE_HOECHSTALTER', 600); }
+
+/** Die Regeln: gespeichert und gueltig, sonst aus einer alten Einstellung dieser Linie, sonst die Vorgabe (mit Nachtruhe). */
+function ap_ansage_regeln($cfg = null)
+{
+    if ($cfg === null) { $cfg = ap_ansage_conf(); }
+    $g = '';
+    $r = ansage_regeln_vorgaben();
+    /* Die Konfiguration ist flach (nur Zeichenketten). */
+    if (isset($cfg['ansage_ruhe_von'], $cfg['ansage_ruhe_bis'])) {
+        $r = array('nachtruhe' => (string) (isset($cfg['ansage_ruhe_ein']) ? $cfg['ansage_ruhe_ein'] : '1') === '0' ? 0 : 1, 'von' => (string) $cfg['ansage_ruhe_von'],
+                   'bis' => (string) $cfg['ansage_ruhe_bis'], 'sperre_min' => (isset($cfg['ansage_sperre_min']) && (string) $cfg['ansage_sperre_min'] !== '') ? (int) $cfg['ansage_sperre_min'] : ((function ($s) { $s = (int) $s; return ($s <= 0 || $s === 600) ? 30 : max(5, min(240, (int) round($s / 60))); })(isset($cfg['ansage_sperre']) ? $cfg['ansage_sperre'] : 600)));
+    }
+    $p = ansage_regeln_wert($r, $g);
+    return $p === null ? ansage_regeln_vorgaben() : $p;
+}
+
+/** Die Warteliste unter einer Dateisperre aendern: $fn(Liste) -> array(neue Liste, Ergebnis). */
+function ap_ansage_warte($fn)
+{
+    $d = ap_paths()['data'];
+    if (!is_dir($d)) { @mkdir($d, 0775, true); }
+    $f = $d . '/ansage_warte.json';
+    $h = @fopen($f, 'c+');
+    if ($h === false) { return null; }
+    if (!flock($h, LOCK_EX)) { fclose($h); return null; }
+    $alt = json_decode((string) stream_get_contents($h), true);
+    list($neu, $erg) = call_user_func($fn, is_array($alt) ? $alt : array());
+    rewind($h);
+    ftruncate($h, 0);
+    fwrite($h, (string) json_encode($neu));
+    fflush($h);
+    flock($h, LOCK_UN);
+    fclose($h);
+    @chmod($f, 0600);
+    return $erg;
+}
+
+/**
+ * Anlaesse hinlegen und den Sender starten; wartet auf nichts. $l: Eintraege fuer ansage_regel_sprechen() (schluessel, text, dringend,
+ * sperre_min, nur_nach). Die Schale schliesst vor dem exec jede Deskriptor-Nummer ueber 2, sonst erbte der Sender die Sperren des Rufers.
+ */
+function ap_ansage_legen(array $l, $jetzt = null)
+{
+    if (!$l) { return 'nichts'; }
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    ap_ansage_warte(function ($alt) use ($l, $jetzt) {
+        foreach ($l as $e) { $alt[] = $e + array('zeit' => $jetzt); }
+        return array(array_slice($alt, -50), null);
+    });
+    $php = (defined('PHP_BINARY') && PHP_BINARY !== '' && is_executable(PHP_BINARY) && stripos(basename(PHP_BINARY), 'php') === 0 && stripos(basename(PHP_BINARY), 'fpm') === false) ? PHP_BINARY : 'php';
+    $befehl = 'for f in /proc/$$/fd/*; do n=${f##*/}; [ "$n" -gt 2 ] 2>/dev/null && eval "exec $n>&-"; done; '
+            . 'exec ' . escapeshellarg($php) . ' -r ' . escapeshellarg('chdir(dirname($argv[1])); $_SERVER["SCRIPT_FILENAME"] = $_SERVER["PHP_SELF"] = $argv[1]; require $argv[1]; ap_ansage_senden();') . ' -- ' . escapeshellarg(__FILE__);
+    $aus = array();
+    $rc = 1;
+    @exec('bash -c ' . escapeshellarg($befehl) . ' </dev/null >/dev/null 2>&1 &', $aus, $rc);
+    return $rc === 0 ? 'gestartet' : 'kein_start';
+}
+
+/** Das Sprechtoken aus Alexa-NG und Chromecast4lox uebernehmen (Stamm 1.3.1). Schreibt NUR bei einer Aenderung, nennt nie das Token. */
+function ap_ansage_token_pflegen($cfg = null)
+{
+    if ($cfg === null) { $cfg = ap_ansage_conf(); }
+    list($neu, $her2, $g) = ansage_token_abgleich(ap_tts($cfg), ap_ansage_her($cfg), ap_ansage_k());
+    if (!$g) { return false; }
+    $cfg = ap_ansage_conf();
+    $cfg = array_merge($cfg, ap_tts_cfg($neu));
+    $cfg['ansage_token_herkunft'] = (string) json_encode($her2);
+    if (!ap_config_write($cfg)) { return false; }
+    ap_log('Ansage: Sprechtoken uebernommen (' . implode(', ', $g) . ').');
+    return true;
+}
+
+/** Der Block fuer Testansage und Pruefzeile: uebernommene Token aufgeloest. Nur im Speicher. */
+function ap_ansage_vor_ort($cfg = null)
+{
+    if ($cfg === null) { $cfg = ap_ansage_conf(); }
+    return ansage_token_fuer_lauf(ap_tts($cfg), ap_ansage_her($cfg), ap_ansage_k());
+}
+
+/** Der Block fuer die Pruefzeile: nur die eingerichteten Ziele; ist keines eingerichtet, sagt die Zeile "aus" statt eines Kreuzes. */
+function ap_ansage_pruefblock($cfg = null)
+{
+    if ($cfg === null) { $cfg = ap_ansage_conf(); }
+    $t = ap_tts($cfg);
+    if ($t['mode'] === 'aus') { return $t; }
+    list($b) = ansage_ziele_bereit(ap_ansage_vor_ort($cfg), ap_ansage_k());
+    if ($b === null) { $t['mode'] = 'aus'; return $t; }
+    return $b;
+}
+
+/** Die Lage im Reiter Test: Ziele, Nachtruhe, Schalter. Nur im geoeffneten Reiter (der Schalter fragt den Broker). */
+function ap_ansage_lage_html($cfg = null)
+{
+    if ($cfg === null) { $cfg = ap_ansage_conf(); }
+    $k = ap_ansage_k();
+    $o = array();
+    foreach (ansage_regel_lage(ap_tts($cfg), ap_ansage_regeln($cfg), $k, true) as $z) {
+        $o[] = '<div class="sm-hilfe">' . htmlspecialchars((string) $z[1], ENT_QUOTES, 'UTF-8') . '</div>';
+    }
+    return implode("\n", $o) . "\n";
+}
+
+/** Die Felder der Regeln fuer die Einmalmeldung (X-2). */
+function ap_ansage_regel_felder(array $anlaesse = array())
+{
+    return ansage_regeln_x2_felder($anlaesse);
+}
+
+/**
+ * Im Vorgang sprechen, wo der Rufer das Ergebnis braucht (Antwort an Loxone, Befehl): Regeln aus dem Stamm mit "dringend, ohne Sperre" - es zaehlt nur der Schalter.
+ * Schalter gesetzt: stand -1, Kennung SCHALTER. Nichts bereit oder Original-Audioserver: wie bisher ansage_sprechen(), damit die Antwort sagt, was fehlt.
+ */
+function ap_ansage_direkt($text, array $e = array(), $tts = null)
+{
+    $conf = ap_ansage_conf();
+    $k = ap_ansage_k();
+    $t = $tts === null ? ap_tts($conf) : $tts;
+    $a = ansage_regel_sprechen(array($e + array('schluessel' => 'direkt', 'text' => (string) $text, 'dringend' => true, 'sperre_min' => 0)), $t, ap_ansage_regeln($conf), $k);
+    if ($a['r'] !== null) { return $a['r']; }
+    if ($a['regel'] === 'SCHALTER') {
+        return array('stand' => -1, 'kennung' => 'SCHALTER', 'art' => isset($t['mode']) ? (string) $t['mode'] : '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
+    }
+    return ansage_sprechen((string) $text, $t, $k);
+}
+
+/**
+ * Der Sender: eigene Sperre, nimmt die Warteliste und spricht nach den Regeln. "aus" und "kein Ziel eingerichtet" hinterlassen keine Zeile;
+ * ein gescheitertes Ziel genau eine je Aenderung (ab Werk EIN darf kein Protokoll vollaufen). Text und Token stehen nie im Protokoll.
+ */
+function ap_ansage_senden($jetzt = null)
+{
+    $d = ap_paths()['data'];
+    if (!is_dir($d)) { @mkdir($d, 0775, true); }
+    $fh = @fopen($d . '/ansage_senden.lock', 'c');
+    if ($fh === false || !flock($fh, LOCK_EX | LOCK_NB)) { return 'laeuft'; }
+    $erg = 'nichts';
+    $l = ap_ansage_warte(function ($alt) { return array(array(), $alt); });
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    $frisch = array();
+    foreach (is_array($l) ? $l : array() as $e) {
+        if (is_array($e) && isset($e['zeit']) && $jetzt - (int) $e['zeit'] <= AP_ANSAGE_HOECHSTALTER) { $frisch[] = $e; }
+    }
+    if ($frisch) {
+        $conf = ap_ansage_conf();
+        ap_ansage_token_pflegen($conf);
+        $conf = ap_ansage_conf();
+        $a = ansage_regel_sprechen($frisch, ap_tts($conf), ap_ansage_regeln($conf), ap_ansage_k());
+        $erg = $a['regel'] !== '' ? $a['regel'] : 'gesprochen';
+        if ($a['r'] !== null) {
+            $merk = $d . '/ansage_lage.txt';
+            $lage = $a['r']['stand'] === 1 ? 'gesprochen' : ansage_kurz($a['r']);
+            if ($a['r']['stand'] === 1 || (string) @file_get_contents($merk) !== $lage) { ap_log('Ansage: ' . ansage_regel_kurz($a)); }
+            @file_put_contents($merk, $lage);
+        } elseif ($a['regel'] !== 'AUS' && $a['regel'] !== 'KEIN_ZIEL') {
+            ap_log('Ansage entfaellt: ' . ansage_regel_kurz($a));
+        }
+    }
+    flock($fh, LOCK_UN);
+    fclose($fh);
+    return $erg;
+}
+
+/** Der Vermerk der uebernommenen Sprechtoken (flach als JSON). */
+function ap_ansage_her($cfg)
+{
+    $h = (is_array($cfg) && isset($cfg['ansage_token_herkunft'])) ? json_decode((string) $cfg['ansage_token_herkunft'], true) : null;
+    return is_array($h) ? $h : array();
 }
 
 /** Der Ansagetext eines Anlasses aus [ANSAGE_TEXT] (de/en ueber den Erzeuger); ohne Werte, wenn

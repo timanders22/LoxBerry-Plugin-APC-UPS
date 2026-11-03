@@ -210,10 +210,13 @@ function apc_x($s)
  * Zustandsdatei; der Selbsttest antwortet SELFTEST;OK=0;ERR=ENDPUNKT_AUS.
  * Ein Merkwort gibt es bewusst nicht (F-E7): der Endpunkt loest nichts aus.
  */
-$cfg = apc_konfig();
-if ($cfg['endpunkt_ein'] !== '1') {
+/* bis 1.2.24 hiess dieses Feld $cfg: das LoxBerry-SDK ueberschreibt ein globales $cfg beim ersten Lesen von general.json (Ausfall MGiSmart 01.11.2026). */
+$ap_lauf_cfg = apc_konfig();
+if ($ap_lauf_cfg['endpunkt_ein'] !== '1') {
     http_response_code(403);
-    if (isset($_GET['selftest'])) {
+    /* 1.2.25 (Nachzug 01.11.2026, wie Renault NG 2.1.23): !empty statt isset - bis 1.2.24 galt auch ?selftest=0 und ?selftest= als Selbsttest,
+     * und eine Adresse mit diesem Anhang tat nie etwas anderes. */
+    if (!empty($_GET['selftest'])) {
         header('Content-Type: text/plain; charset=UTF-8');
         echo "SELFTEST;OK=0;ERR=ENDPUNKT_AUS\n";
         exit;
@@ -231,7 +234,7 @@ if ($cfg['endpunkt_ein'] !== '1') {
  * Geraetekontakt, kein Schreibzugriff, kein Aufruf von apcaccess - sonst
  * wuerde die Pruefung selbst zum Eingriff. Seit 1.2.23 hinter dem Schalter.
  */
-if (isset($_GET['selftest'])) {
+if (!empty($_GET['selftest'])) {
     header('Content-Type: text/plain; charset=UTF-8');
     echo "SELFTEST;OK=1;QUELLE=apc_ups_ng\n";
     exit;
@@ -259,8 +262,8 @@ if ($prog === '') {
 // durchgereicht, sondern weggelassen, und dann fragt apcaccess wie bisher
 // die oertliche USV.
 $befehl = escapeshellarg($prog) . ' status';
-if ($cfg['host'] !== '' && preg_match('/^[A-Za-z0-9._-]+(:[0-9]{1,5})?$/', $cfg['host'])) {
-    $befehl .= ' ' . escapeshellarg($cfg['host']);
+if ($ap_lauf_cfg['host'] !== '' && preg_match('/^[A-Za-z0-9._-]+(:[0-9]{1,5})?$/', $ap_lauf_cfg['host'])) {
+    $befehl .= ' ' . escapeshellarg($ap_lauf_cfg['host']);
 }
 
 $result = array();
@@ -320,7 +323,7 @@ if (is_array($z) && !empty($z['werte']) && is_array($z['werte'])) {
      * Attribut alter bleibt. Der Takt wie im Reiter Test: mindestens 5 s,
      * unlesbar = Vorgabe 30 s. */
     // E3 (1.2.23): preg_match statt ctype_digit (Regeln/03 - ctype ist nicht garantiert).
-    $takt = preg_match('/^[0-9]+\z/', (string) $cfg['intervall']) === 1 ? max(5, (int) $cfg['intervall']) : 30;
+    $takt = preg_match('/^[0-9]+\z/', (string) $ap_lauf_cfg['intervall']) === 1 ? max(5, (int) $ap_lauf_cfg['intervall']) : 30;
     echo "   <OK>" . ($alter <= 3 * $takt ? 1 : 0) . "</OK>\n";
     echo "   <ALTER>" . (int) $alter . "</ALTER>\n";
     foreach ($z['werte'] as $k => $v) {

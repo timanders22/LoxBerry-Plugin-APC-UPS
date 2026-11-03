@@ -475,8 +475,8 @@ VORGABEN = {
     # Bestand beim Update 1 (Lese-Regel in ap_config_read() und im Endpunkt).
     "endpunkt_ein":     "0",
     # V1: Block tts der gemeinsamen Sprachausgabe (ansage_vorgaben('aus') der
-    # Stammfassung, seit 1.2.24 Fassung 1.2.0) - ab Werk aus. Der Dienst liest nur tts_mode.
-    "tts_mode":         "aus",
+    # Stammfassung, seit 1.2.24 Fassung 1.2.0) - seit 1.2.25 ab Werk an. Der Dienst liest den Block nicht.
+    "tts_mode":         "musicserver",
     "tts_ip":           "",
     "tts_port":         "7091",
     "tts_zones":        "1",
@@ -505,6 +505,12 @@ VORGABEN = {
     "ansage_vorwarnung":  "1",
     "ansage_abschaltung": "1",
     "ansage_sperre":      "600",
+    # 1.2.25: Wann gesprochen wird (Regeln des Stamms); der Dienst liest sie nicht, er behaelt sie nur beim Schreiben.
+    "ansage_ruhe_ein":    "1",
+    "ansage_ruhe_von":    "22:00",
+    "ansage_ruhe_bis":    "07:00",
+    "ansage_sperre_min":  "",
+    "ansage_token_herkunft": "",
     # V2: haus/usv/stufe und haus/usv/zaehler an andere Plugins geben
     # (Regeln/07 Nr. 15) - ab Werk aus.
     "haus_usv_ein":     "0",
