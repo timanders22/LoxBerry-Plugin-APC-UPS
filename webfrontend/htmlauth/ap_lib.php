@@ -255,6 +255,8 @@ function ap_defaults()
         'ansage_sperre'      => '600',
         // 1.2.25: Wann gesprochen wird (Stamm). ansage_sperre_min leer = aus ansage_sperre; der Vermerk reist nie in einer Sicherung.
         'ansage_ruhe_ein'    => '1',
+        'ansage_tafel_ein'   => '1',
+        'ansage_tafel_namen' => '',
         'ansage_ruhe_von'    => '22:00',
         'ansage_ruhe_bis'    => '07:00',
         'ansage_sperre_min'  => '',
@@ -1584,10 +1586,12 @@ function ap_wert_pruefen($k, $v)
         return array(true, $tp['ziele'] ? (string) json_encode($tp['ziele'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '', '');
     }
     /* 1.2.25: die Regeln (flach). */
-    if (in_array((string) $k, array('ansage_ruhe_ein', 'ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min', 'ansage_token_herkunft'), true)) {
+    if (in_array((string) $k, array('ansage_tafel_ein', 'ansage_tafel_namen', 'ansage_ruhe_ein', 'ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min', 'ansage_token_herkunft'), true)) {
         $ap_rg = function ($k, $w) {
         if ($k === 'ansage_token_herkunft') { return $w === '' || is_array(json_decode($w, true)); }
         if ($k === 'ansage_ruhe_ein') { return $w === '0' || $w === '1'; }
+        if ($k === 'ansage_tafel_ein') { return $w === '0' || $w === '1'; }
+        if ($k === 'ansage_tafel_namen') { return ansage_tafel_namen_ok($w); }
         if ($k === 'ansage_ruhe_von' || $k === 'ansage_ruhe_bis') { return is_string($w) && (bool) preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]\z/', $w); }
         if ($k === 'ansage_sperre_min') { return is_string($w) && ($w === '' || ((bool) preg_match('/^[0-9]{1,3}\z/', $w) && (int) $w >= 5 && (int) $w <= 240)); }
             return false;
@@ -2203,6 +2207,9 @@ function ap_ansage_regeln($cfg = null)
     if (isset($cfg['ansage_ruhe_von'], $cfg['ansage_ruhe_bis'])) {
         $r = array('nachtruhe' => (string) (isset($cfg['ansage_ruhe_ein']) ? $cfg['ansage_ruhe_ein'] : '1') === '0' ? 0 : 1, 'von' => (string) $cfg['ansage_ruhe_von'],
                    'bis' => (string) $cfg['ansage_ruhe_bis'], 'sperre_min' => (isset($cfg['ansage_sperre_min']) && (string) $cfg['ansage_sperre_min'] !== '') ? (int) $cfg['ansage_sperre_min'] : ((function ($s) { $s = (int) $s; return ($s <= 0 || $s === 600) ? 30 : max(5, min(240, (int) round($s / 60))); })(isset($cfg['ansage_sperre']) ? $cfg['ansage_sperre'] : 600)));
+        // Stamm 1.4.0: die Tafel. Fehlt der Schluessel, gilt die Vorgabe des Stamms (an).
+        if (isset($cfg['ansage_tafel_ein']) && (string) $cfg['ansage_tafel_ein'] === '0') { $r['tafel'] = 0; }
+        if (isset($cfg['ansage_tafel_namen'])) { $r['tafel_namen'] = (string) $cfg['ansage_tafel_namen']; }
     }
     $p = ansage_regeln_wert($r, $g);
     return $p === null ? ansage_regeln_vorgaben() : $p;
@@ -2268,7 +2275,7 @@ function ap_ansage_token_pflegen($cfg = null)
 function ap_ansage_vor_ort($cfg = null)
 {
     if ($cfg === null) { $cfg = ap_ansage_conf(); }
-    return ansage_token_fuer_lauf(ap_tts($cfg), ap_ansage_her($cfg), ap_ansage_k());
+    return ansage_tafel_einreihen(ansage_token_fuer_lauf(ap_tts($cfg), ap_ansage_her($cfg), ap_ansage_k()), ap_ansage_regeln($cfg), ap_ansage_k(), true);     // Stamm 1.4.0: die Tafel, wenn sie bereitsteht
 }
 
 /** Der Block fuer die Pruefzeile: nur die eingerichteten Ziele; ist keines eingerichtet, sagt die Zeile "aus" statt eines Kreuzes. */

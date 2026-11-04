@@ -347,7 +347,7 @@ if ($ap_ist_post && isset($_POST['save'])) {
             }
         }
         $ap_eingaben = ap_eingaben_merken('settings', $ap_zurueck, $ap_falsch);
-    } elseif (ap_config_write(array_merge($ap_cfg, $ap_gut, ap_tts_cfg($ap_tts_neu), array('ansage_ruhe_ein' => !empty($ap_rneu['nachtruhe']) ? '1' : '0', 'ansage_ruhe_von' => (string) $ap_rneu['von'], 'ansage_ruhe_bis' => (string) $ap_rneu['bis'], 'ansage_sperre_min' => (string) (int) $ap_rneu['sperre_min'])))) {
+    } elseif (ap_config_write(array_merge($ap_cfg, $ap_gut, ap_tts_cfg($ap_tts_neu), array('ansage_tafel_ein' => !empty($ap_rneu['tafel']) ? '1' : '0', 'ansage_tafel_namen' => (string) $ap_rneu['tafel_namen'], 'ansage_ruhe_ein' => !empty($ap_rneu['nachtruhe']) ? '1' : '0', 'ansage_ruhe_von' => (string) $ap_rneu['von'], 'ansage_ruhe_bis' => (string) $ap_rneu['bis'], 'ansage_sperre_min' => (string) (int) $ap_rneu['sperre_min'])))) {
         $ap_saved = true;
         foreach ($ap_thinw as $ap_th) { $ap_hinweise[] = $ap_th['text']; }     // Welle Mehrfach-Ziele: erst nach dem Speichern
         if (isset($GLOBALS['ap_zweitschrift_ok']) && $GLOBALS['ap_zweitschrift_ok'] === false) {
