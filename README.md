@@ -4,6 +4,15 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.28
+
+- **Update:** Scheitert die Sicherung oder die Marke, bricht das Update ab und die bisherige Fassung bleibt.
+- **Sprechtoken:** Ein von Hand eingetragenes Alexa- oder Google-Token wird nicht mehr vom Token des Nachbar-Plugins überschrieben.
+- **Formular:** Tafel- und HomePod-Felder gehören jetzt zu den Feldern, die eine Beanstandung im Formular mitführt und markiert. Ein beanstandeter Tafel- oder HomePod-Name bleibt zur Korrektur im Feld stehen.
+- **`alarm_level` 3:** Auch wenn die USV `LOWBATT` meldet oder die Zeit `TIMEOUT` (`MAXTIME`) abgelaufen ist, stehen `alarm_level=3` und `shutdown_pending=1` an. Bisher blieb es dort bei Stufe 1, Loxone warf nichts ab.
+- **Dienst:** Ein unbekannter Schalter von Hand startet nicht mehr den Dauerdienst.
+- **HomePod:** Schalter und Gerätename aus dem Formular werden jetzt gespeichert. Bisher gingen sie beim Speichern verloren.
+
 ## Neu in 1.2.27
 
 - Die Oberfläche zeigt PHP-Fehler nicht mehr im Browser an: Sie verrieten Serverpfade und hätten heruntergeladene Dateien beschädigt.

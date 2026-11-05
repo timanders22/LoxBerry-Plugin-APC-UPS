@@ -58,6 +58,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import apc_common as gem   # noqa: E402
 
+# 1.2.28 (K8a): der Dienst kennt keine Schalter. Ein Tippfehler von Hand startet ihn nicht.
+if __name__ == "__main__" and sys.argv[1:]:
+    sys.stderr.write("FEHLER: unbekannter Schalter %s. Der Dienst kennt keine Schalter. Es wurde nichts gestartet.\n"
+                     % ", ".join(sys.argv[1:]))
+    sys.exit(2)
+
 # Aus einem ausgepackten Archiv startet der Dienst nicht - VOR allem, was
 # schreibt (Protokollordner, PID-Datei, Zustandsdatei). Bis 1.2.12 lief er
 # dort los und nahm, lag das Archiv unter einer echten Wurzel, Konfiguration

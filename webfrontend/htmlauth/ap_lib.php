@@ -257,6 +257,8 @@ function ap_defaults()
         'ansage_ruhe_ein'    => '1',
         'ansage_tafel_ein'   => '1',
         'ansage_tafel_namen' => '',
+        'ansage_homepod_ein' => '1',     // 1.2.28: bis hierher zeigte das Formular HomePod, gespeichert wurde es nicht
+        'ansage_homepod_geraet' => '',
         'ansage_ruhe_von'    => '22:00',
         'ansage_ruhe_bis'    => '07:00',
         'ansage_sperre_min'  => '',
@@ -1586,12 +1588,14 @@ function ap_wert_pruefen($k, $v)
         return array(true, $tp['ziele'] ? (string) json_encode($tp['ziele'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '', '');
     }
     /* 1.2.25: die Regeln (flach). */
-    if (in_array((string) $k, array('ansage_tafel_ein', 'ansage_tafel_namen', 'ansage_ruhe_ein', 'ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min', 'ansage_token_herkunft'), true)) {
+    if (in_array((string) $k, array('ansage_tafel_ein', 'ansage_tafel_namen', 'ansage_homepod_ein', 'ansage_homepod_geraet', 'ansage_ruhe_ein', 'ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min', 'ansage_token_herkunft'), true)) {
         $ap_rg = function ($k, $w) {
         if ($k === 'ansage_token_herkunft') { return $w === '' || is_array(json_decode($w, true)); }
         if ($k === 'ansage_ruhe_ein') { return $w === '0' || $w === '1'; }
         if ($k === 'ansage_tafel_ein') { return $w === '0' || $w === '1'; }
         if ($k === 'ansage_tafel_namen') { return ansage_tafel_namen_ok($w); }
+        if ($k === 'ansage_homepod_ein') { return $w === '0' || $w === '1'; }
+        if ($k === 'ansage_homepod_geraet') { return ansage_geraet_ok($w); }
         if ($k === 'ansage_ruhe_von' || $k === 'ansage_ruhe_bis') { return is_string($w) && (bool) preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]\z/', $w); }
         if ($k === 'ansage_sperre_min') { return is_string($w) && ($w === '' || ((bool) preg_match('/^[0-9]{1,3}\z/', $w) && (int) $w >= 5 && (int) $w <= 240)); }
             return false;
@@ -1857,6 +1861,7 @@ function ap_eingaben_felder($formular)
                             'ansage_abschaltung'),
                             function_exists('ansage_x2_felder') ? ansage_x2_felder(ap_ansage_opt()) : array(),
                             function_exists('ansage_regeln_x2_felder') ? ansage_regeln_x2_felder() : array(),
+                            array('ansage_tafel_ein', 'ansage_tafel_namen', 'ansage_homepod_ein', 'ansage_homepod_geraet'),     // 1.2.28: Tafel und HomePod dazu: ansage_regeln_formular() beanstandet sie, ohne Eintrag hier ging die Beanstandung samt Eingaben verloren.
                             ap_ziele_x2_felder()),
         'mqtt'     => array('mqtt', 'themenpraefix', 'rohfelder'),
         'endpunkt' => array('endpunkt_ein'),
@@ -2210,6 +2215,8 @@ function ap_ansage_regeln($cfg = null)
         // Stamm 1.4.0: die Tafel. Fehlt der Schluessel, gilt die Vorgabe des Stamms (an).
         if (isset($cfg['ansage_tafel_ein']) && (string) $cfg['ansage_tafel_ein'] === '0') { $r['tafel'] = 0; }
         if (isset($cfg['ansage_tafel_namen'])) { $r['tafel_namen'] = (string) $cfg['ansage_tafel_namen']; }
+        if (isset($cfg['ansage_homepod_ein']) && (string) $cfg['ansage_homepod_ein'] === '0') { $r['homepod'] = 0; }     // 1.2.28
+        if (isset($cfg['ansage_homepod_geraet'])) { $r['homepod_geraet'] = (string) $cfg['ansage_homepod_geraet']; }
     }
     $p = ansage_regeln_wert($r, $g);
     return $p === null ? ansage_regeln_vorgaben() : $p;

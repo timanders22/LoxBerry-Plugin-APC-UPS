@@ -335,8 +335,8 @@ if ($ap_ist_post && isset($_POST['save'])) {
         foreach (ansage_x2_felder(ap_ansage_opt()) as $ap_k) {
             if (isset($_POST[$ap_k]) && is_string($_POST[$ap_k])) { $ap_zurueck[$ap_k] = $_POST[$ap_k]; }
         }
-        foreach (ansage_regeln_x2_felder() as $ap_k) {     // 1.2.25
-            if ($ap_k === 'ansage_ruhe_ein') { $ap_zurueck[$ap_k] = isset($_POST[$ap_k]) ? '1' : '0'; }
+        foreach (array_merge(ansage_regeln_x2_felder(), array('ansage_tafel_ein', 'ansage_tafel_namen', 'ansage_homepod_ein', 'ansage_homepod_geraet')) as $ap_k) {     // 1.2.25; 1.2.28: Tafel und HomePod dazu
+            if (in_array($ap_k, array('ansage_ruhe_ein', 'ansage_tafel_ein', 'ansage_homepod_ein'), true)) { $ap_zurueck[$ap_k] = isset($_POST[$ap_k]) ? '1' : '0'; }
             elseif (isset($_POST[$ap_k]) && is_string($_POST[$ap_k])) { $ap_zurueck[$ap_k] = $_POST[$ap_k]; }
         }
         // Welle Mehrfach-Ziele (1.2.24): die Tabelle reist flach als name.N (ap_ziele_x2_felder(), ap_ziele_x2_post()).
@@ -347,7 +347,7 @@ if ($ap_ist_post && isset($_POST['save'])) {
             }
         }
         $ap_eingaben = ap_eingaben_merken('settings', $ap_zurueck, $ap_falsch);
-    } elseif (ap_config_write(array_merge($ap_cfg, $ap_gut, ap_tts_cfg($ap_tts_neu), array('ansage_tafel_ein' => !empty($ap_rneu['tafel']) ? '1' : '0', 'ansage_tafel_namen' => (string) $ap_rneu['tafel_namen'], 'ansage_ruhe_ein' => !empty($ap_rneu['nachtruhe']) ? '1' : '0', 'ansage_ruhe_von' => (string) $ap_rneu['von'], 'ansage_ruhe_bis' => (string) $ap_rneu['bis'], 'ansage_sperre_min' => (string) (int) $ap_rneu['sperre_min'])))) {
+    } elseif (ap_config_write(array_merge($ap_cfg, $ap_gut, ap_tts_cfg($ap_tts_neu), array('ansage_token_herkunft' => (string) json_encode(ansage_token_herkunft_formular($_POST, ap_ansage_her($ap_cfg))), /* 1.2.28: von Hand eingetragen = kein Nachbar-Token mehr */ 'ansage_tafel_ein' => !empty($ap_rneu['tafel']) ? '1' : '0', 'ansage_tafel_namen' => (string) $ap_rneu['tafel_namen'], 'ansage_homepod_ein' => !empty($ap_rneu['homepod']) ? '1' : '0', 'ansage_homepod_geraet' => (string) $ap_rneu['homepod_geraet'], 'ansage_ruhe_ein' => !empty($ap_rneu['nachtruhe']) ? '1' : '0', 'ansage_ruhe_von' => (string) $ap_rneu['von'], 'ansage_ruhe_bis' => (string) $ap_rneu['bis'], 'ansage_sperre_min' => (string) (int) $ap_rneu['sperre_min'])))) {
         $ap_saved = true;
         foreach ($ap_thinw as $ap_th) { $ap_hinweise[] = $ap_th['text']; }     // Welle Mehrfach-Ziele: erst nach dem Speichern
         if (isset($GLOBALS['ap_zweitschrift_ok']) && $GLOBALS['ap_zweitschrift_ok'] === false) {

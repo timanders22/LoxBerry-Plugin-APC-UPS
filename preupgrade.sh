@@ -41,7 +41,7 @@ if [ -z "$APC_BASE" ]; then
     echo "<WARNING> noch in \$LBHOMEDIR, und oberhalb dieses Skripts traegt kein Verzeichnis"
     echo "<WARNING> config/plugins, data/plugins und config/system/general.json."
     echo "<WARNING> Es wurde nichts angelegt, nichts gesichert und kein Dienst angehalten."
-    exit 1
+    exit 2
 fi
 # Rueckfall, falls sudo die Umgebung ausgeraeumt hat (env_reset).
 LBPCONFIG="${LBPCONFIG:-$APC_BASE/config/plugins}"
@@ -64,6 +64,10 @@ PCONFIG="$LBPCONFIG/$PDIR"
 # entfernt sie und startet den Dienst selbst. Sie liegt NEBEN dem
 # Datenordner, weil purge_installation den Ordner selbst loescht.
 APC_PDIR="${3:-apc_ups_ng}"
+# 05.11.2026: ein Ordnername mit "/" oder "." waere ein Pfad hinaus (dieselbe Formel wie MGiSmart und Govee).
+case "$APC_PDIR" in
+    ''|.|..|*/*) echo "<FAIL> Unbrauchbarer Ordnername '$APC_PDIR' - nichts angefasst."; exit 2 ;;
+esac
 MARKE="$APC_BASE/data/plugins/$APC_PDIR.upgrade_laeuft"
 # I2 (Entscheidung 1): VOR dem Anlegen festhalten, ob schon eine Marke lag.
 # Dann hat ein frueherer Versuch DIESES Updates nach preupgrade.sh
@@ -87,6 +91,29 @@ else
     echo "<FAIL> abgebrochen; die bisherige Fassung bleibt unveraendert installiert."
     exit 2
 fi
+# ---------- Update-Schutz (05.11.2026, Bauart Govee 0.9.34) ----------
+# plugininstall.pl bricht nur bei Rueckgabewert >1 vor purge_installation ab. Die Kopie entsteht als <Ziel>.neu.<pid>, traegt 0600,
+# BEVOR Inhalt hineinkommt, wird mit cmp verglichen und erst dann per mv an ihren Platz gestellt: eine heile Sicherung bleibt heil.
+ZS_FEHL=""
+zs_hinlegen() {   # $1 Quelle, $2 Ziel
+    [ -d "$2" ] && return 1
+    zs_neu="$2.neu.$$"
+    rm -f "$zs_neu" 2>/dev/null
+    if ( : > "$zs_neu" ) 2>/dev/null && chmod 600 "$zs_neu" 2>/dev/null \
+       && cp "$1" "$zs_neu" 2>/dev/null && cmp -s "$1" "$zs_neu" \
+       && mv -f "$zs_neu" "$2" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$zs_neu" 2>/dev/null
+    return 1
+}
+zs_schluss() {   # Fehlschlag gesammelt: Marke weg, Abbruch vor purge_installation
+    [ -n "$ZS_FEHL" ] || return 0
+    echo "<FAIL> Nicht gesichert:$ZS_FEHL - die Aktualisierung wird abgebrochen, damit der Purge die Originale nicht loescht."
+    echo "<FAIL> Die bisherige Fassung bleibt installiert. Bitte Platz und Rechte unter config/plugins und data/plugins pruefen."
+    [ "$APC_MARKE_VORHER" = 1 ] || rm -f "$MARKE" 2>/dev/null
+    exit 2
+}
 
 # Ist PID ein Dienst dieses Plugins? Argumentweise (Regeln/03): argv[0] ein
 # Python, argv[1] genau das Skript. Ein Editor mit der Datei offen, eine
@@ -226,6 +253,7 @@ if [ -d "$PCONFIG" ]; then
     else
         echo "<WARNING> Die Konfiguration liess sich NICHT vollstaendig sichern"
         echo "<WARNING> (cp Rueckgabewert $CP_RC; nicht in der Sicherung: ${ABWEICHEND:-keine})."
+        ZS_FEHL="$ZS_FEHL Konfiguration"
     fi
 else
     echo "<INFO> Kein Konfigurationsordner $PCONFIG vorhanden."
@@ -245,6 +273,7 @@ if [ "$SICHER_OK" = "1" ]; then
         rm -rf "$NEU" 2>/dev/null
         echo "<WARNING> Die bisherige Sicherung liess sich nicht beiseite legen und"
         echo "<WARNING> bleibt unveraendert: $SICHER"
+        ZS_FEHL="$ZS_FEHL Update-Sicherung"
     elif mv -T "$NEU" "$SICHER" 2>/dev/null; then
         rm -rf "$SICHER.tausch" 2>/dev/null
         # I3: gemeldet wird, was nachgelesen ist - nicht eine feste Zahl.
@@ -259,6 +288,7 @@ if [ "$SICHER_OK" = "1" ]; then
         rm -rf "$NEU" 2>/dev/null
         echo "<WARNING> Die neue Sicherung liess sich nicht an ihren Platz bringen."
         echo "<WARNING> Platz und Rechte in $LBPDATA pruefen."
+        ZS_FEHL="$ZS_FEHL Update-Sicherung"
     fi
 else
     rm -rf "$NEU" 2>/dev/null
@@ -346,14 +376,12 @@ NETZ_ZWEIT="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.apc_ups_ng.cfg"
 # Einstellungen angelegt." unbedingt, auch ohne Konfiguration (Faelle F1, F5).
 if apc_cfg_hat_inhalt "$NETZ_CFG/apc_ups_ng.cfg"; then
     rm -f "$NETZ_ZWEIT.neu" 2>/dev/null
-    if cp -p "$NETZ_CFG/apc_ups_ng.cfg" "$NETZ_ZWEIT.neu" 2>/dev/null \
-       && chmod 0600 "$NETZ_ZWEIT.neu" 2>/dev/null \
-       && cmp -s "$NETZ_CFG/apc_ups_ng.cfg" "$NETZ_ZWEIT.neu" \
-       && mv -f "$NETZ_ZWEIT.neu" "$NETZ_ZWEIT" 2>/dev/null; then
+    if zs_hinlegen "$NETZ_CFG/apc_ups_ng.cfg" "$NETZ_ZWEIT"; then
         echo "<INFO> Zweitschrift der Einstellungen angelegt."
     else
         rm -f "$NETZ_ZWEIT.neu" 2>/dev/null
         echo "<WARNING> Die Zweitschrift liess sich nicht anlegen: $NETZ_ZWEIT"
+        ZS_FEHL="$ZS_FEHL apc_ups_ng.cfg"
         if [ -f "$NETZ_ZWEIT" ]; then
             echo "<WARNING> Die bisherige Zweitschrift bleibt unveraendert."
         fi
@@ -375,4 +403,5 @@ else
     echo "<INFO> Keine Konfiguration mit vollstaendigem Stand - keine Zweitschrift angelegt."
 fi
 
+zs_schluss
 exit 0

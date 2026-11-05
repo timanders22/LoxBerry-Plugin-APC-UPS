@@ -926,8 +926,22 @@ def batteriealter_monate(text, jetzt=None):
     return monate if monate >= 0 else None
 
 
+def _abschaltgrund(status, netz, tonbatt, maxtime):
+    """1.2.28 (AP-1): meldet die USV selbst den Abschaltgrund? apcupsd faehrt nicht nur an MBATTCHG und MINTIMEL
+    herunter, auch an LOWBATT der USV und an TIMEOUT (MAXTIME > 0, TONBATT erreicht). Bis 1.2.27 blieb es dabei bis zum
+    Halt bei Stufe 1, shutdown_pending 0: Loxone warf nichts ab. Mit Netz (ONLINE LOWBATT nach der Rueckkehr, der Akku
+    laedt) ist keins davon ein Grund; SHUTTING DOWN gilt immer, dann laeuft der Halt schon."""
+    if "SHUTTING" in status:
+        return True
+    if netz:
+        return False
+    if "LOWBATT" in status:
+        return True
+    return bool(maxtime) and maxtime > 0 and tonbatt is not None and tonbatt >= maxtime
+
+
 def _alarmstufe(cfg, verbindung_weg, akku, netz, ladung, rest,
-                ab_ladung, ab_minuten):
+                ab_ladung, ab_minuten, abschaltgrund=False):
     """Gestufte Warnung fuer Loxone.
 
     Rueckgabe: (stufe, abschaltung_steht_bevor)
@@ -938,7 +952,9 @@ def _alarmstufe(cfg, verbindung_weg, akku, netz, ladung, rest,
       3  apcupsd faehrt jetzt herunter
 
     Die Schwellen kommen aus apcupsd selbst (MBATTCHG, MINTIMEL) und werden
-    NICHT geraten. Liefert die USV sie nicht, kann keine der beiden oberen
+    NICHT geraten. Stufe 3 entsteht ausserdem aus dem Abschaltgrund, den apcupsd
+    selbst meldet (_abschaltgrund). Liefert die USV weder das noch die Schwellen,
+    kann keine der beiden oberen
     Stufen entstehen und es bleibt bei 1 - eine erfundene Schwelle waere
     schlimmer als keine Stufung, weil Loxone dann zu frueh oder gar nicht
     abwirft. Damit das niemand fuer "alles in Ordnung" haelt, beantwortet der
@@ -962,6 +978,8 @@ def _alarmstufe(cfg, verbindung_weg, akku, netz, ladung, rest,
     if not akku:
         # Weder eindeutig Netz noch eindeutig Akku - kein Urteil.
         return None, None
+    if abschaltgrund:
+        return 3, 1
 
     vor_min = zahl(cfg, "vorwarn_min", 5, float)
     vor_pro = zahl(cfg, "vorwarn_prozent", 10, float)
@@ -1033,7 +1051,8 @@ def messwerte(roh, cfg=None):
     ab_minuten = wert_zahl(roh, "MINTIMEL")
 
     stufe, bevor = _alarmstufe(cfg, verbindung_weg, akku, netz,
-                               ladung, rest, ab_ladung, ab_minuten)
+                               ladung, rest, ab_ladung, ab_minuten,
+                               _abschaltgrund(status, netz, wert_zahl(roh, "TONBATT"), wert_zahl(roh, "MAXTIME")))
 
     return {
         "status":                status,
