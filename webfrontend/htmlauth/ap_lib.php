@@ -378,6 +378,132 @@ function ap_config_write($werte)
     return true;
 }
 
+/**
+ * Laeuft gerade eine Aktualisierung? Die Marke legt preupgrade.sh neben den
+ * Datenordner, postupgrade.sh entfernt sie (seit 1.2.31 auch hier gelesen).
+ * Dieselbe Regel wie im Waechter cron/cron.05min: sie gilt, solange sie
+ * juenger als eine Stunde ist, bis fuenf Minuten "aus der Zukunft" sind eine
+ * nachgestellte Uhr; eine unlesbare Marke gilt nicht.
+ */
+function ap_upgrade_laeuft()
+{
+    $p = ap_paths();
+    if ($p['home'] === '') {
+        return false;
+    }
+    $f = $p['home'] . '/data/plugins/' . $p['plugin'] . '.upgrade_laeuft';
+    clearstatcache(true, $f);
+    $roh = is_file($f) ? @file_get_contents($f) : false;
+    if ($roh === false || !preg_match('/^[0-9]{1,12}$/', trim((string) $roh))) {
+        return false;
+    }
+    $alter = time() - (int) trim((string) $roh);
+    return $alter > -300 && $alter < 3600;
+}
+
+/**
+ * Konfiguration vervollstaendigen (seit 1.2.31, Regeln/05 "Die Konfiguration
+ * wird vervollstaendigt, nicht nur ergaenzt"; Bauform Docker NG 1.3.7, fuer
+ * Zeilendateien wie BLE-Scanner 1.3.40).
+ *
+ * Bis 1.2.31 ergaenzten ap_config_read() und apc_common.konfiguration_lesen()
+ * fehlende Schluessel bei jedem Lesen nur im Speicher; in apc_ups_ng.cfg kamen
+ * sie erst mit dem naechsten Speichern im Formular. Aufgerufen beim
+ * Dienststart (bin/apc_service.py main() ueber bin/ap_vervollstaendigen.php)
+ * vor dem ersten Lesen der Konfiguration; weil nur bei FEHLENDEN Schluesseln
+ * geschrieben wird, bleibt es bei einem Schreibvorgang.
+ *
+ * - Nur mit LoxBerry-Wurzel (nicht im Archivmodus), nicht waehrend einer
+ *   Aktualisierung (ap_upgrade_laeuft()), nur wenn die Datei das Merkwort
+ *   traegt: Kopf [apc_ups_ng] und formtoken mit 32 Hexzeichen - dieselbe
+ *   Regel wie apc_cfg_hat_inhalt in den Hakenskripten. Eine fehlende, leere,
+ *   mitgelieferte oder alte Datei ist Sache der Selbstheilung bzw. des
+ *   ersten Speicherns.
+ * - Kein Neubau ueber ap_config_write(): der verwirft fremde Schluessel und
+ *   ordnet um. Die ZEILEN DER DATEI bleiben unveraendert stehen; je
+ *   fehlender Vorgabe kommt eine Zeile "schluessel=wert" unmittelbar vor die
+ *   formtoken-Zeile (dorthin, wo auch postupgrade.sh endpunkt_ein einfuegt).
+ *   Zeilenenden der Datei bleiben.
+ * - Gezaehlt wird wie in ap_config_read() (Praefix apc_ups. abgestreift,
+ *   klein geschrieben); nachgetragen werden nur Schluessel aus ap_defaults(),
+ *   also nur, was das Speichern auch schreibt.
+ * - Fehlt endpunkt_ein, wird 1 geschrieben, nicht die Vorgabe 0: das ist die
+ *   Lese-Regel fuer vorhandene Dateien in ap_config_read() und im Endpunkt
+ *   webfrontend/html/index.php. Mit der Vorgabe schaltete das Nachtragen den
+ *   Lese-Endpunkt einer Bestandsanlage still ab.
+ * - Geschrieben ueber ap_datei_schreiben() (daneben, 0600 wie das Speichern,
+ *   Ruecklesen, umbenennen), danach die Zweitschrift wie beim Speichern.
+ * - Genau eine Protokollzeile mit den Namen, nie mit Werten.
+ *
+ * Rueckgabe: array('stand' => ruht|ohne_datei|ohne_merkwort|vollstaendig
+ *                  |ergaenzt|fehler, 'schluessel' => array(...))
+ */
+function ap_config_vervollstaendigen()
+{
+    $p = ap_paths();
+    if ($p['home'] === '' || ap_upgrade_laeuft()) {
+        return array('stand' => 'ruht', 'schluessel' => array());
+    }
+    $file = $p['config'];
+    clearstatcache(true, $file);
+    if (!is_file($file)) {
+        return array('stand' => 'ohne_datei', 'schluessel' => array());
+    }
+    $txt = @file_get_contents($file);
+    if (!is_string($txt) || $txt === ''
+        || preg_match('/^\[apc_ups_ng\][ \t\r]*$/m', $txt) !== 1
+        || preg_match('/^formtoken=[0-9a-fA-F]{32}[ \t\r]*$/m', $txt) !== 1) {
+        return array('stand' => 'ohne_merkwort', 'schluessel' => array());
+    }
+    $zeilen = preg_split('/(?<=\n)/', $txt, -1, PREG_SPLIT_NO_EMPTY);
+    $eol = (strpos($txt, "\r\n") !== false) ? "\r\n" : "\n";
+    $da = array();
+    $stelle = -1;
+    foreach ($zeilen as $i => $zeile) {
+        $t = trim($zeile);
+        if ($t === '' || $t[0] === ';' || $t[0] === '#' || $t[0] === '[') {
+            continue;
+        }
+        $pos = strpos($t, '=');
+        if ($pos === false) {
+            continue;
+        }
+        $klein = strtolower(preg_replace('/^apc[_-]?ups\./i', '', trim(substr($t, 0, $pos))));
+        $da[$klein] = true;
+        if ($stelle < 0 && preg_match('/^formtoken=[0-9a-fA-F]{32}[ \t]*$/', $t) === 1) {
+            $stelle = $i;
+        }
+    }
+    if ($stelle < 0) {
+        return array('stand' => 'ohne_merkwort', 'schluessel' => array());
+    }
+    $fehlend = array();
+    foreach (ap_defaults() as $k => $vorgabe) {
+        if (!isset($da[$k])) {
+            $fehlend[$k] = ($k === 'endpunkt_ein') ? '1' : (string) $vorgabe;
+        }
+    }
+    if (!$fehlend) {
+        return array('stand' => 'vollstaendig', 'schluessel' => array());
+    }
+    $neu = '';
+    foreach ($fehlend as $k => $v) {
+        $neu .= $k . '=' . trim(str_replace(array("\r", "\n"), array('', ' '), $v)) . $eol;
+    }
+    array_splice($zeilen, $stelle, 0, array($neu));
+    $inhalt = implode('', $zeilen);
+    $namen = array_keys($fehlend);
+    if (!ap_datei_schreiben($file, $inhalt, 0600)) {
+        ap_log('Konfiguration NICHT vervollstaendigt: apc_ups_ng.cfg liess sich nicht schreiben ('
+            . count($namen) . ' fehlende Schluessel).', 'Dienststart', 'WARNING');
+        return array('stand' => 'fehler', 'schluessel' => $namen);
+    }
+    $GLOBALS['ap_zweitschrift_ok'] = ap_zweitschrift_schreiben($inhalt);
+    ap_log('Konfiguration vervollstaendigt - ' . count($namen)
+        . ' fehlende Vorgaben in apc_ups_ng.cfg geschrieben: ' . implode(', ', $namen), 'Dienststart');
+    return array('stand' => 'ergaenzt', 'schluessel' => $namen);
+}
+
 function ap_status()
 {
     $f = ap_paths()['status'];
@@ -2397,12 +2523,13 @@ function ap_ansage_text($anlass, $ladung = -1, $rest = -1)
 
 /** Welle Mehrfach-Ziele (1.2.24): eine Zeile der Oberflaeche ins Protokoll des Dienstes (apc_ups_ng.log) - die
  *  Testansage nennt dort ihr Ergebnis wie in den anderen Linien, nur die Kurzform ohne Text und Token (Nr. 18).
- *  Legt keinen Ordner an (Archivmodus, Pruefstand ohne Protokollordner: nichts). */
-function ap_log($text)
+ *  Legt keinen Ordner an (Archivmodus, Pruefstand ohne Protokollordner: nichts). Seit 1.2.31 mit Quelle und Stufe
+ *  (ap_config_vervollstaendigen() schreibt beim Dienststart); ohne Angabe wie bisher. */
+function ap_log($text, $quelle = 'Oberflaeche', $stufe = 'INFO')
 {
     $d = ap_paths()['logdir'];
     if (is_dir($d)) {
-        @file_put_contents($d . '/apc_ups_ng.log', date('Y-m-d H:i:s') . ' [INFO] Oberflaeche: ' . $text . "\n",
+        @file_put_contents($d . '/apc_ups_ng.log', date('Y-m-d H:i:s') . ' [' . $stufe . '] ' . $quelle . ': ' . $text . "\n",
                            FILE_APPEND | LOCK_EX);
     }
 }

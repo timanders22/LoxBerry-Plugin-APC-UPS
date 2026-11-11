@@ -113,6 +113,8 @@ PID_DATEI = os.path.join(gem.LOG_DIR if os.path.isdir("/run/shm") is False else 
 # (benachrichtigen()); die Pruefstaende setzen hier eine Attrappe ein.
 ANSAGE_PHP = "php"
 ANSAGE_ZEIT = 20
+# 1.2.31: Aufruf von bin/ap_vervollstaendigen.php beim Dienststart; die Pruefstaende setzen hier eine Attrappe ein.
+VERVOLLSTAENDIGEN_PHP = "php"
 _sperre_fh = None
 
 
@@ -1237,6 +1239,29 @@ class Dienst:
         self.mqtt.stop()
 
 
+def konfiguration_vervollstaendigen():
+    """Seit 1.2.31 (Regeln/05): fehlende Vorgaben einmal in die Datei schreiben - beim Dienststart.
+
+    Geschrieben wird ueber bin/ap_vervollstaendigen.php und damit ueber ap_lib.php, nicht von hier:
+    ein Schreiber fuer ein Format (Bauart BLE-Scanner 1.3.40). Die Zeile mit den Namen schreibt
+    ap_config_vervollstaendigen() selbst ins Protokoll; hier steht nur eine Zeile, wenn der Aufruf
+    scheiterte - nie ein Wert. Waehrend einer Aktualisierung (Marke) schreibt die PHP-Seite nichts.
+    Rueckgabe: die Ausgabezeile des Skripts oder "" (fuer die Pruefung)."""
+    skript = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ap_vervollstaendigen.php")
+    try:
+        r = subprocess.run([VERVOLLSTAENDIGEN_PHP, skript, gem.PLUGIN_NAME], stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, timeout=20, check=False)
+    except (OSError, subprocess.SubprocessError) as fehler:
+        log.warning("Konfiguration nicht vervollstaendigt: Aufruf von ap_vervollstaendigen.php scheiterte (%s)",
+                    type(fehler).__name__)
+        return ""
+    zeilen = r.stdout.decode("utf-8", "replace").strip().splitlines()
+    zeile = zeilen[-1] if zeilen else ""
+    if r.returncode != 0 or not zeile.startswith("VERVOLLSTAENDIGEN;"):
+        log.warning("Konfiguration nicht vervollstaendigt: Rueckgabe %s, Ausgabe %r", r.returncode, zeile[:200])
+    return zeile
+
+
 def main():
     if not einmal_starten():
         log.warning("Es laeuft bereits ein APC-UPS NG-Dienst (%s) - dieser Start wird "
@@ -1244,6 +1269,8 @@ def main():
                     "Dienst bei jedem Speichern neu.", PID_DATEI)
         return 0
 
+    # 1.2.31 (Regeln/05): fehlende Vorgaben einmal in die Datei - vor dem ersten Lesen in Dienst().
+    konfiguration_vervollstaendigen()
     dienst = Dienst()
 
     def beenden(signum, rahmen):   # noqa: ARG001

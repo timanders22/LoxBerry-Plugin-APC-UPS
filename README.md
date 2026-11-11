@@ -4,6 +4,12 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.31
+
+- **Konfiguration wird nach einem Update vervollständigt:** Fehlen in `apc_ups_ng.cfg` Einstellungen, die eine neuere Fassung mitbringt, trägt der Dienst sie beim Start jetzt einmal in die Datei ein, bevor er die Konfiguration liest (neu: `bin/ap_vervollstaendigen.php`, geschrieben wird über `ap_lib.php`). Das Protokoll `apc_ups_ng.log` nennt die ergänzten Namen, keine Werte. Bisher ergänzte das Plugin fehlende Einstellungen nur beim Lesen; in die Datei kamen sie erst beim nächsten Speichern im Formular. Fehlt `endpunkt_ein`, wird wie bisher beim Lesen einer bestehenden Datei `1` eingetragen, nicht die Vorgabe `0` einer Neuinstallation – der Lese-Endpunkt einer bestehenden Anlage bleibt also offen.
+- Eingefügt werden nur die fehlenden Zeilen, unmittelbar vor der Zeile `formtoken=`; alle übrigen Zeilen bleiben byteweise stehen, auch Schlüssel, die das Plugin nicht kennt, und die Zeilenenden. Die Zweitschrift zieht mit. Nicht angefasst werden eine fehlende oder leere Datei, eine ohne Kopf `[apc_ups_ng]` oder ohne Formularmerkmal (also auch die mitgelieferte Vorlage) und jede Datei, solange eine Aktualisierung läuft. Ist das Plugin ausgeschaltet (`enabled=0`), startet der Dienst nicht, und die Datei wird erst beim nächsten Speichern vollständig.
+- Gemessen im Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4, dazu ein echter Lauf des Dienststarts mit Attrappen für Sperre und Dienst; am Gerät ist es noch nicht gemessen.
+
 ## Neu in 1.2.30
 
 - Gemeinsames Sprachmodul 1.4.3: Als LoxBerry-Wurzel aus `LBHOMEDIR` gilt für die Sprachausgabe nur noch ein Ordner mit `config/plugins`, `data/plugins` und `config/system/general.json`; bis 1.4.2 genügte `config/system`, und ein Prüfstand oder Rest mit diesem Ordner wurde wie ein LoxBerry gelesen. Auf einem LoxBerry ändert sich nichts.
