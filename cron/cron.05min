@@ -22,46 +22,25 @@
 # LoxBerry legt diese Datei unter <Wurzel>/system/cron/cron.05min/<plugin>
 # ab, also drei Ebenen unter der Wurzel. Eine Rechnung mit ".." landet
 # daneben, und der Waechter lauft dann ins Leere, ohne es zu sagen.
+# Upgrade-Marke (Regeln/06, Entscheidung des Hausherrn 18.11.2026, Frage 60; Bauart Renault-NG 2.1.37):
+# waehrend einer Aktualisierung ruht dieser Takt. preupgrade.sh legt die Marke neben dem Datenordner
+# mit der Unixzeit an, postinstall.sh oder postupgrade.sh entfernt sie. Ist sie juenger als 3600 s,
+# endet der Takt hier still, vor jedem Schreiben. Eine Marke, die 3600 s oder aelter ist, in der Zukunft
+# liegt oder keine Unixzeit enthaelt, gilt nicht - eine abgebrochene Aktualisierung legt den Takt nicht
+# fuer immer still. Liefert die Uhr keine Zahl, gilt die Marke (geschlossen ausfallen).
+UPGM_MARKE="REPLACELBPDATADIR.upgrade_laeuft"
+if [ -f "$UPGM_MARKE" ]; then
+    upgm_jetzt=$(date +%s 2>/dev/null); upgm_seit=$(cat "$UPGM_MARKE" 2>/dev/null)
+    case "$upgm_seit" in ''|*[!0-9]*) upgm_seit=0 ;; esac
+    case "$upgm_jetzt" in ''|*[!0-9]*|0) exit 0 ;; esac
+    if [ "$upgm_seit" -le "$upgm_jetzt" ] && [ $((upgm_jetzt - upgm_seit)) -lt 3600 ]; then exit 0; fi
+fi
+
 DIENST="REPLACELBPBINDIR/apc_service.py"
 # A14 (1.2.23): der Name der PID-Datei traegt den Ordner (fuer apc_ups_ng
 # byte-gleich wie bisher).
 APC_PIDNAME="REPLACELBPPLUGINDIR.pid"
 
-# Laeuft gerade eine Aktualisierung, startet der Waechter nichts. Die Marke
-# legt preupgrade.sh neben den Datenordner, postupgrade.sh entfernt sie und
-# startet den Dienst selbst. Ohne sie startete der Takt in der Luecke
-# zwischen neuer Cron-Datei und postinstall.sh einen Dienst mit der
-# Vorgabe-Konfiguration (in WSL gemessen, Pruefung-Upgradeluecke-2026-09-17).
-# Gilt nur, solange sie juenger als eine Stunde ist: eine abgebrochene
-# Installation darf den Waechter nicht fuer immer stilllegen. Eine
-# unlesbare Marke gilt nicht.
-MARKE="REPLACELBPDATADIR.upgrade_laeuft"
-if [ -f "$MARKE" ]; then
-    SEIT=$(cat "$MARKE" 2>/dev/null)
-    case "$SEIT" in ""|*[!0-9]*) SEIT=0 ;; esac
-    # Die Uhr wird gemessen, nicht angenommen. Bis 1.2.10 stand hier
-    # ALTER aus einer Kommandoersetzung mit date DIREKT in der Rechnung:
-    # liefert "date" nichts - unter Last kann ein fork scheitern -, rechnet
-    # die Schale mit einer leeren Zeichenkette, das Alter wird negativ, die
-    # Bedingung faellt durch, und der Waechter startet mitten in der
-    # Aktualisierung. In WSL gemessen (18.09.2026, Fall waechter_g3o, date
-    # als stumme Attrappe): 1 Prozess statt 0. Ein Schutz faellt geschlossen
-    # aus (CLAUDE.md §4) - ohne Uhr gilt die Marke. Dieselbe Stelle steht in
-    # daemon/daemon.
-    JETZT=$(date +%s 2>/dev/null)
-    case "$JETZT" in ""|*[!0-9]*) JETZT="" ;; esac
-    if [ -z "$JETZT" ]; then
-        exit 0
-    fi
-    ALTER=$(( JETZT - SEIT ))
-    # 300 s Vorlauf: bis fuenf Minuten "aus der Zukunft" ist eine
-    # nachgestellte Uhr, kein Grund, die Sperre zu verwerfen. Bis 1.2.12 stand
-    # hier -ge 0 (in WSL gemessen, Pruefung-APC-UPS-1.2.13, Fall M1: Marke
-    # 120 s voraus, Dienst gestartet). Dieselbe Stelle steht in daemon/daemon.
-    if [ "$ALTER" -ge -300 ] && [ "$ALTER" -lt 3600 ]; then
-        exit 0
-    fi
-fi
 
 # Ist PID ein Dienst dieses Plugins? Argumentweise (Regeln/03): argv[0] ein
 # Python, argv[1] genau das Skript. Ein Editor mit der Datei offen wird so
