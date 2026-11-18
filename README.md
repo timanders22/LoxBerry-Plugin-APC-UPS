@@ -4,6 +4,21 @@
 Restlaufzeit und Last per MQTT an den Loxone Miniserver. Bei Stromausfall und
 Netzrückkehr gibt es zusätzlich eine Benachrichtigung.
 
+## Neu in 1.2.32
+
+- **Verhalten geändert – Einstellungen sichern und zurückspielen über das gemeinsame Sicherungsmodul 1.2.11:** Beide Knöpfe im Reiter Einstellungen verhalten sich jetzt wie in den übrigen Plugins dieser Reihe.
+  - „Zurückspielen“ wirkt nur, wenn der Haken „Ja, die geltenden Einstellungen durch die Sicherung ersetzen“ unmittelbar vor dem Knopf gesetzt ist; ohne ihn wird die Datei nicht gelesen und nichts geändert.
+  - Eine Einstellung in der Datei, die diese Fassung nicht kennt, wird verworfen und mit ihrem Namen genannt; die übrigen werden trotzdem zurückgespielt. Bis 1.2.31 wurde die ganze Datei abgewiesen.
+  - Ein leerer Wert in der Datei überschreibt keinen gespeicherten; der bisherige Wert bleibt und wird genannt.
+  - Wie bisher ändert eine Datei mit einem ungültigen Wert gar nichts, und alle Beanstandungen werden genannt, jetzt jeweils mit dem Namen der Einstellung. Eine Datei, die ein Sprechtoken für Alexa-NG oder Chromecast 4 Lox NG trägt, wird weiter abgewiesen; die hinterlegten Sprechtoken und das Formularmerkmal bleiben beim Zurückspielen erhalten.
+  - Einträge der geltenden Einstellungen, die diese Fassung nicht kennt (etwa aus einer Bearbeitung von Hand), fallen beim Zurückspielen weg und werden mit ihrem Namen genannt, nie mit ihrem Wert. Bis 1.2.31 fielen sie still weg.
+  - Eine neue Sicherung trägt im Kopf das Kennzeichen `LoxBerry-Plugin-APC-UPS` und die Fassung. Sicherungen der Fassungen 1.2.14 bis 1.2.31 (Kennzeichen „APC-UPS NG (…)“) werden weiter angenommen; Einstellungen, die eine ältere Sicherung noch nicht kannte, behalten ihren geltenden Wert und werden genannt.
+  - Die Datei darf jetzt bis 256 KB groß sein (bisher 64 KB); eine Sicherung dieses Plugins ist wenige Kilobyte groß. Eine Datei, die ein Editor mit einer unsichtbaren Markierung am Anfang (UTF-8-BOM) gespeichert hat, wird gelesen wie ohne sie.
+  - Inhalt wie bisher: alle Einstellungen der Reiter Einstellungen und MQTT, keine Zugangsdaten, kein Formularmerkmal, keine Sprechtoken.
+- **Knopf „Dokumentation“:** `plugin.cfg` nennt jetzt `WEBSITE=` mit diesem Repository; LoxBerry übernimmt die Adresse bei der Installation und zeigt sie in der Plugin-Verwaltung als Knopf.
+- Gemessen mit dem Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4, der über einen Webserver die echten Knöpfe drückt, und mit den Sicherungen aller 18 Fassungen 1.2.14 bis 1.2.31. Am Gerät nicht gemessen.
+- **Sicherungsmodul 1.2.11:** Wandelt ein Plugin beim Zurückspielen eine Sicherung aus einer Textdatei um, sagt die Meldung das jetzt mit einem gemeinsamen Satz, und Mängel darin werden in allen Plugins mit denselben Bezeichnungen genannt. Dieses Plugin wandelt keine Textdateien um; an seinem Verhalten ändert sich dadurch nichts. Gemessen mit dem Prüfstand auf dem Arbeitsrechner unter PHP 7.4 und 8.4. Am Gerät nicht gemessen.
+
 ## Neu in 1.2.31
 
 - **Konfiguration wird nach einem Update vervollständigt:** Fehlen in `apc_ups_ng.cfg` Einstellungen, die eine neuere Fassung mitbringt, trägt der Dienst sie beim Start jetzt einmal in die Datei ein, bevor er die Konfiguration liest (neu: `bin/ap_vervollstaendigen.php`, geschrieben wird über `ap_lib.php`). Das Protokoll `apc_ups_ng.log` nennt die ergänzten Namen, keine Werte. Bisher ergänzte das Plugin fehlende Einstellungen nur beim Lesen; in die Datei kamen sie erst beim nächsten Speichern im Formular. Fehlt `endpunkt_ein`, wird wie bisher beim Lesen einer bestehenden Datei `1` eingetragen, nicht die Vorgabe `0` einer Neuinstallation – der Lese-Endpunkt einer bestehenden Anlage bleibt also offen.

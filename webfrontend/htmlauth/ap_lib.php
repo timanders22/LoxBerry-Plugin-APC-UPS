@@ -43,6 +43,11 @@
 if (is_file(__DIR__ . '/sprachausgabe.php')) {
     require_once __DIR__ . '/sprachausgabe.php';
 }
+/* 1.2.32: die Abschrift des gemeinsamen Sicherungsmoduls (Stammfassung Werkzeuge/gemeinsam/sicherung.php, byte-gleich,
+ * Werkzeuge/sicherung_einbauen.py) liegt neben dieser Datei. "Einstellungen sichern" und "Einstellungen zurueckspielen"
+ * laufen darueber, in allen Linien gleich (Auftrag des Hausherrn 12.11.2026); diese Linie uebergibt nur ihre
+ * Beschreibung (ap_sicherung_beschreibung()). Antwortet als Einstieg mit 403. */
+require_once __DIR__ . '/sicherung.php';
 
 if (!function_exists('ap_e')) {
     function ap_e($s)
@@ -283,10 +288,19 @@ function ap_shell_arg($s)
     return "'" . str_replace("'", "'\\''", str_replace("\0", '', (string) $s)) . "'";
 }
 
-/** Rueckgabe: array($werte, $altesFormat) */
+/**
+ * Rueckgabe: array($werte, $altesFormat)
+ *
+ * 1.2.32 (Bauform des Sicherungsmoduls, Entscheidung des Hausherrn 15.11.2026): die Lesefunktion sortiert nichts
+ * aus - Vorgaben und Dateiinhalt zusammen. Ein Schluessel, den diese Fassung nicht kennt (etwa aus einer Bearbeitung
+ * von Hand), steht mit im Ergebnis; das Zurueckspielen einer Sicherung nennt ihn dann mit Namen, wenn er wegfaellt.
+ * Bis 1.2.31 fiel er hier still weg. Am Speichern aendert sich nichts: ap_config_write() schreibt wie bisher genau
+ * die Schluessel aus ap_defaults(). Der Dienst liest die Datei selbst (bin/apc_common.py konfiguration_lesen()).
+ */
 function ap_config_read()
 {
     $werte = ap_defaults();
+    $vorgaben = $werte;
     $alt = false;
     $file = ap_paths()['config'];
     if (!is_file($file)) {
@@ -305,8 +319,11 @@ function ap_config_read()
         }
         $klein = strtolower(preg_replace('/^apc[_-]?ups\./i', '', trim(substr($t, 0, $pos))));
         $wert = trim(trim(substr($t, $pos + 1)), "\"'");
-        if (array_key_exists($klein, $werte)) {
-            $werte[$klein] = $wert;
+        if ($klein === '') {
+            continue;     // "=wert" ist kein Schluessel
+        }
+        $werte[$klein] = $wert;
+        if (array_key_exists($klein, $vorgaben)) {
             $gesehen[$klein] = true;
         } elseif (in_array($klein, array('loglevel', 'sendmail', 'mailto'), true)) {
             $alt = true;
@@ -1443,171 +1460,101 @@ function ap_abo_text()
 
 
 /**
- * Eine Sicherungsdatei einlesen - und dabei NICHTS durchgehen lassen.
+ * 1.2.32: Die Beschreibung dieser Linie fuer das gemeinsame Sicherungsmodul (sicherung.php, Stammfassung 1.2.9).
+ * Bis 1.2.31 stand hier eine eigene Lesefunktion (ap_sicherung_lesen()): ein unbekannter Schluessel wies die ganze
+ * Datei ab, die Grenze war 64 kB, einen Haken gab es nicht.
  *
- * Die sieben Punkte aus REGELN_2, und der wichtigste ist der dritte: eine
- * halb gueltige Datei ueberschreibt GAR NICHTS. Wer eine Sicherung
- * zurueckspielt, will entweder den ganzen Stand oder gar keinen - eine zur
- * Haelfte uebernommene Konfiguration ist schlimmer als die alte, und man
- * sieht es ihr nicht an.
+ * Kennzeichen: 1.2.14 bis 1.2.31 schrieben _plugin = "APC-UPS NG (<ordner>)" (gemessen 18.11.2026 an den Archiven;
+ * 1.2.4 bis 1.2.13 lieferten keine Sicherung). Das traegt Leerzeichen, Klammern und den Ordner der Anlage und ist
+ * keine Namensform, die das Modul annimmt; neu ist deshalb der Name des Repositorys, und die bisherige Form gilt
+ * nach Muster als frueheres Kennzeichen derselben Linie (wie Audioserver-NG).
  *
- * Unbekannte Schluessel sind eine Beanstandung, kein stiller Verlust: sie
- * stammen aus einer anderen Fassung oder einem anderen Plugin.
+ * Inhalt: alle Schluessel aus ap_defaults(). Diese Linie hat weder Aktionstoken noch Zugangsdaten (den Broker
+ * verwaltet LoxBerry). Nie darin, beim Zurueckspielen bleibt der geltende Wert ('nie_aus_datei'): das
+ * Formularmerkmal formtoken, die uebernommenen Sprechtoken tts_alexa_token und tts_google_token und der Vermerk
+ * ansage_token_herkunft - wie bis 1.2.31. Wie bis 1.2.31: eine Datei, die ein Sprechtoken traegt, stammt nicht aus
+ * "Einstellungen sichern" und wird abgewiesen (ap_sicherung_quer()).
  *
- * Rueckgabe: array(Konfiguration|null, Beanstandungen[], uebernommene Werte,
- * beanstandete Schluessel[]). Den vierten Wert braucht "Sichern" (X-3), um
- * die betroffenen Einstellungen zu nennen, ohne ihre Werte zu wiederholen.
+ * Was fehlen darf: die 13 Einstellungen bis 1.2.22 (ap_sicherung_pflicht()) muss jede Sicherung tragen; jede
+ * spaeter dazugekommene behaelt den geltenden Wert und wird genannt (Regel 6 der Welle 1, wie bis 1.2.31). Jeder
+ * Wert geht durch ap_wert_pruefen() - dieselbe Pruefung wie im Formular - und wird in dessen Form gespeichert.
  */
-function ap_sicherung_lesen($roh, $bisher = null)
-{
-    $mangel = array();
-    $falsch = array();
-    $daten = json_decode((string) $roh, true);
-    if (!is_array($daten)) {
-        return array(null, array(ap_t('EINST.SICH_KEIN_JSON')), 0, array(), array());
-    }
-    if (!is_array($bisher)) {
-        list($bisher, $unbenutzt) = ap_config_read();
-    }
-    $erlaubt = ap_sicherung_schluessel();
-    $pflicht = ap_sicherung_pflicht();
-    $geheim = array('tts_alexa_token', 'tts_google_token');
-    $werte = array();
-    foreach ($daten as $k => $w) {
-        $k = (string) $k;
-        if ($k !== '' && $k[0] === '_') {
-            continue;
-        }
-        if ($k === 'formtoken' || $k === 'ansage_token_herkunft') {     // 1.2.25: der Vermerk kommt nie aus einer Datei
-            continue;
-        }
-        if (in_array($k, $geheim, true)) {
-            if ($w !== '') {
-                $mangel[] = sprintf(ap_t('EINST.SICH_TOKEN'), $k);
-                $falsch[] = $k;
-            }
-            continue;
-        }
-        if (!in_array($k, $erlaubt, true)) {
-            $mangel[] = sprintf(ap_t('EINST.SICH_FREMD'), $k);
-            $falsch[] = $k;
-            continue;
-        }
-        $werte[$k] = $w;
-    }
-    if (!$werte) {
-        $mangel[] = ap_t('EINST.SICH_LEER');
-    }
-    /* FEHLENDE Pflichtschluessel sind eine Beanstandung, kein stiller Rueckfall (VolkswagenID
-     * 0.9.11, 03.09.2026). Fehlende wahlfreie (neu in 1.2.23) behalten den jetzigen Stand. */
-    $fehlend = array_values(array_diff($pflicht, array_keys($werte)));
-    if ($fehlend) {
-        $mangel[] = sprintf(ap_t('EINST.SICH_FEHLEND'), count($fehlend), implode(', ', $fehlend));
-    }
-    $unveraendert = array_values(array_diff($erlaubt, $pflicht, array_keys($werte)));
-    list($gut, $pruef, $pruef_falsch) = ap_werte_pruefen($werte);
-    $mangel = array_merge($mangel, $pruef);
-    if ($mangel) {
-        return array(null, $mangel, count($werte),
-                     array_values(array_unique(array_merge($falsch, $fehlend, $pruef_falsch))), array());
-    }
-    $neu = $bisher;
-    foreach ($gut as $k => $v) {
-        $neu[$k] = $v;
-    }
-    return array($neu, array(), count($gut), array(), $unveraendert);
-}
-
-/** Die Schluessel einer Sicherung: alle Einstellungen ausser dem Formularmerkmal. */
-function ap_sicherung_schluessel()
-{
-    return array_values(array_diff(array_keys(ap_defaults()),
-                                   array('formtoken', 'tts_alexa_token', 'tts_google_token', 'ansage_token_herkunft')));
-}
-
-/** Die Fassung aus der Plugindatenbank von LoxBerry, '' wenn nicht feststellbar. */
-function ap_fassung()
+function ap_sicherung_beschreibung()
 {
     $p = ap_paths();
-    if ($p['home'] === '') {
-        return '';
+    $vorgaben = ap_defaults();
+    $pflicht = ap_sicherung_pflicht();
+    $schluessel = array();
+    foreach (array_keys($vorgaben) as $k) {
+        $knoten = in_array($k, $pflicht, true) ? array() : array('fehlt' => 'behalten');
+        $knoten['wandeln'] = function ($w) use ($k) {
+            $e = ap_wert_pruefen((string) $k, $w);
+            return $e[0] ? $e[1] : $w;
+        };
+        $schluessel[$k] = $knoten;
     }
-    $j = @json_decode((string) @file_get_contents($p['home'] . '/data/system/plugindatabase.json'), true);
-    if (!is_array($j)) {
-        return '';
-    }
-    $liste = (isset($j['plugins']) && is_array($j['plugins'])) ? $j['plugins'] : $j;
-    foreach ($liste as $e) {
-        if (!is_array($e)) {
-            continue;
-        }
-        $ordner = isset($e['folder']) ? $e['folder']
-                : (isset($e['PLUGINDB_FOLDER']) ? $e['PLUGINDB_FOLDER'] : '');
-        if ((string) $ordner === $p['plugin']) {
-            return (string) (isset($e['version']) ? $e['version']
-                : (isset($e['PLUGINDB_VERSION']) ? $e['PLUGINDB_VERSION'] : ''));
-        }
-    }
-    return '';
+    return array(
+        'kennzeichen' => 'LoxBerry-Plugin-APC-UPS',
+        'kennzeichen_frueher_muster' => '/^APC-UPS NG \([A-Za-z0-9_.\-]{1,64}\)\z/',
+        'hinweis' => ap_t('EINST.SICH_KOPF_HINWEIS'),
+        /* Die Fassung im Kopf kommt aus der Plugin-Datenbank bzw. plugin.cfg (sicherung_fassung_lesen()). */
+        'home' => (string) $p['home'],
+        'ordner' => (string) $p['plugin'],
+        'plugin_cfg' => dirname(dirname(__DIR__)) . '/plugin.cfg',
+        'vorgaben' => $vorgaben,
+        'schluessel' => $schluessel,
+        'nie_aus_datei' => array('formtoken', 'tts_alexa_token', 'tts_google_token', 'ansage_token_herkunft'),
+        /* Die Beanstandung nennt den Schluessel, wie er in der Datei steht, und den Grund aus ap_wert_pruefen(). */
+        'pruefen' => function ($k, $w) {
+            $e = ap_wert_pruefen((string) $k, $w);
+            return $e[0] ? '' : sprintf(ap_t('EINST.SICH_WERT'), (string) $k, $e[2]);
+        },
+        'quer' => 'ap_sicherung_quer',
+        'jetzt' => function () {
+            list($c) = ap_config_read();
+            return $c;
+        },
+        't' => 'ap_t',
+        'e' => 'ap_e',
+    );
 }
 
 /**
- * Die Sicherungsdatei (C2): aus ap_config_read(), ohne formtoken, mit
- * lesbarem _-Kopf (Plugin, Stand, Hinweis). Genau diese Datei nimmt
- * ap_sicherung_lesen() wieder an.
+ * Wie bis 1.2.31: traegt die Datei ein Sprechtoken, stammt sie nicht aus "Einstellungen sichern" (der Knopf schreibt
+ * nie eines) - abgewiesen, nichts geaendert. Rueckgabe fuer das Modul: Liste von array(Name, Text); $daten ist die
+ * Datei vor den Regeln 2 und 3 (die Sprechtoken uebergeht das Modul dort still, 'nie_aus_datei').
  */
-function ap_sicherung_json($cfg)
-{
-    $f = ap_fassung();
-    $aus = array(
-        '_plugin'  => 'APC-UPS NG (' . ap_paths()['plugin'] . ')',
-        '_stand'   => sprintf(ap_t('EINST.SICH_STAND'), $f !== '' ? $f : '?', date('Y-m-d H:i:s')),
-        '_hinweis' => ap_t('EINST.SICH_KOPF_HINWEIS'),
-    );
-    // X-3 (30.09.2026): Wuerde das eigene Zurueckspielen diese Datei
-    // abweisen, sagt es der Kopf - nur die Schluesselnamen, nie die Werte.
-    // Geliefert wird trotzdem: eine Sicherung, die man nicht bekommt, hilft
-    // beim Umzug noch weniger als eine, die man vorher berichtigen muss.
-    $maengel = ap_sicherung_eigene_maengel($cfg);
-    if ($maengel) {
-        $aus['_warnung'] = sprintf(ap_t('EINST.SICH_KOPF_WARNUNG'), implode(', ', $maengel));
-    }
-    foreach (ap_sicherung_werte($cfg) as $k => $v) {
-        $aus[$k] = $v;
-    }
-    return json_encode($aus, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-}
-
-/** Die Werte einer Sicherung ohne Kopf - genau das, was ap_sicherung_json() schreibt. */
-function ap_sicherung_werte($cfg)
+function ap_sicherung_quer($neu, $r = null, $daten = null)
 {
     $aus = array();
-    foreach (ap_sicherung_schluessel() as $k) {
-        $aus[$k] = ap_roh($cfg, $k);
+    foreach (array('tts_alexa_token', 'tts_google_token') as $k) {
+        if (is_array($daten) && array_key_exists($k, $daten) && $daten[$k] !== '') {
+            $aus[] = array($k, sprintf(ap_t('EINST.SICH_TOKEN'), $k));
+        }
     }
     return $aus;
 }
 
 /**
- * X-3 (30.09.2026, Bauform KODI-NG U3): Bestuende die eigene Sicherung das
- * Zurueckspielen? Geprueft wird mit ap_sicherung_lesen() - DERSELBEN Funktion
- * wie beim Zurueckspielen, nicht mit einer zweiten Regel, die auseinanderlaufen
- * koennte. Rueckgabe: die beanstandeten Schluessel, leer = besteht.
- * Anlass: eine von Hand geaenderte Konfiguration (etwa intervall=4) oder ein
- * Altwert aus 1.2.13 (Praefix apcups/) wurde gesichert, und erst der Umzug
- * zeigte, dass die Datei nicht zurueckgeht.
+ * Die Sicherungsdatei als JSON-Text (C2): Kopf (_hinweis, _plugin, _fassung, _stand) und Inhalt baut das Modul.
+ * X-3 wie bisher: wuerde das Zurueckspielen genau diese Datei abweisen, sagt es der Kopf _warnung - nur mit Namen,
+ * nie mit Werten; geliefert wird trotzdem. false, wenn sich der Text nicht bilden laesst.
+ */
+function ap_sicherung_json($cfg)
+{
+    $js = sicherung_json(sicherung_bauen(ap_sicherung_beschreibung(), $cfg));
+    return $js === '' ? false : $js;
+}
+
+/**
+ * X-3 (30.09.2026, Bauform KODI-NG U3): Bestuende die eigene Sicherung das Zurueckspielen? Geprueft wird mit dem
+ * Modul (sicherung_selbstpruefung()) - DERSELBEN Pruefung wie beim Zurueckspielen. Rueckgabe: die Namen der
+ * beanstandeten Einstellungen, leer = besteht.
  */
 function ap_sicherung_eigene_maengel($cfg)
 {
-    $js = json_encode(ap_sicherung_werte($cfg), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    if ($js === false) {
-        return array('?');
-    }
-    $r = array_pad(ap_sicherung_lesen($js, $cfg), 4, array());
-    if ($r[0] !== null) {
-        return array();
-    }
-    return $r[3] ? array_values($r[3]) : array('?');
+    $b = ap_sicherung_beschreibung();
+    return sicherung_selbstpruefung($b, sicherung_bauen($b, $cfg), $cfg);
 }
 
 /** Grenzen der Zahlenfelder - EINE Stelle fuer Formular und Sicherung. */
@@ -2095,7 +2042,8 @@ function ap_http_abruf($url, $ctx)
  * Haus-Thema (V2), Namenstabelle und V2-Hakenliste
  * ================================================================== */
 
-/** Die Sicherung der Pflichtschluessel: die 13 Einstellungen bis 1.2.22 (N5). */
+/** Die Pflichtschluessel einer Sicherung: die 13 Einstellungen bis 1.2.22 (N5); seit 1.2.32 in
+ *  ap_sicherung_beschreibung() ('fehlt' ab Werk 'pflicht', alle anderen 'behalten'). */
 function ap_sicherung_pflicht()
 {
     return array('enabled', 'intervall', 'aktualisierung', 'themenpraefix', 'mqtt', 'benachrichtigung',

@@ -477,7 +477,8 @@ $ap_frame = class_exists('LBWeb', false);
 /* ---------------- Einstellungen sichern ----------------
  *
  * C2 (1.2.14): gebaut aus ap_config_read(), OHNE formtoken und mit einem
- * lesbaren _-Kopf (ap_sicherung_json). Bis 1.2.13 stand hier apc_konfig() -
+ * lesbaren _-Kopf (ap_sicherung_json; seit 1.2.32 ueber das gemeinsame
+ * Sicherungsmodul, Kennzeichen LoxBerry-Plugin-APC-UPS). Bis 1.2.13 stand hier apc_konfig() -
  * eine Funktion, die es nur im Endpunkt gibt (webfrontend/html/index.php) und
  * die nur host liefert: jeder Klick endete mit "Call to undefined function"
  * (gemessen unter 7.4, 8.4 und 8.5, Befund B2). Zugangsdaten kennt diese
@@ -500,56 +501,56 @@ if ($ap_ist_post && isset($_POST['ap_sichern'])) {
 
 /* ---------------- Einstellungen zurueckspielen ----------------
  *
- * is_uploaded_file() ZUERST: ohne diese Pruefung liesse sich jede Datei des
- * Servers unterschieben. Dann die Groessengrenze - eine Sicherung dieses
- * Plugins ist wenige Kilobyte gross; alles darueber wird gar nicht gelesen. */
+ * 1.2.32: den Eingang prueft das gemeinsame Sicherungsmodul (sicherung_eingang()) - in jeder Linie gleich: zuerst
+ * der Haken zurueck_ok (ohne ihn wird nichts gelesen und nichts geaendert), dann is_uploaded_file() und die
+ * Groessengrenze des Moduls; erst danach wird die Datei gelesen. Lesen, Pruefen, Speichern, Zweitschrift messen und
+ * Protokollzeile macht sicherung_zurueckspielen(): Unbekanntes wird verworfen und mit Namen genannt, ein leerer Wert
+ * laesst den bisherigen stehen, eine halb gueltige Datei aendert GAR NICHTS (alle Beanstandungen gesammelt).
+ * Gespeichert wird genau der Stand, den das Modul liefert (ap_config_write(), zieht die Zweitschrift mit). Bis 1.2.31
+ * stand hier eine eigene Lesefunktion mit 64 kB Grenze und ohne Haken. */
 if ($ap_ist_post && isset($_POST['ap_zurueck'])) {
-    /* C3 (1.2.14): Grenze 64 kB (Regeln/05), jeder Wert geprueft wie beim
-     * Speichern (ap_sicherung_lesen), die Erfolgsmeldung wird ausgegeben (bis
-     * 1.2.13 landete sie in einer Liste, die nie jemand ausgab), und ein
-     * laufender Dienst wird nachgezogen. */
-    $ap_datei = (isset($_FILES['ap_sicherung']) && is_array($_FILES['ap_sicherung']))
-        ? $_FILES['ap_sicherung'] : array();
-    $ap_tmp = (isset($ap_datei['tmp_name']) && is_string($ap_datei['tmp_name']))
-        ? $ap_datei['tmp_name'] : '';
-    if ($ap_tmp === '' || !@is_uploaded_file($ap_tmp)) {
-        $ap_fehler[] = ap_t('EINST.SICH_KEINE_DATEI');
-    } elseif ((int) @filesize($ap_tmp) > 65536) {
-        $ap_fehler[] = ap_t('EINST.SICH_ZU_GROSS');
+    $ap_sb = ap_sicherung_beschreibung();
+    list($ap_sroh, $ap_sab) = sicherung_eingang($ap_sb, $_POST, $_FILES, 'ap_sicherung');
+    /* Die Meldungen als Klartext: diese Seite maskiert jede Meldung bei der Ausgabe (ap_e()). */
+    $ap_klar = array('e' => function ($s) { return $s; });
+    if ($ap_sab !== null) {
+        $ap_sm = sicherung_meldungen($ap_klar + $ap_sb, $ap_sab);
+        foreach ($ap_sm['fehler'] as $ap_x) { $ap_fehler[] = $ap_x; }
     } else {
-        list($ap_neu, $ap_mangel, $ap_n, $ap_bean, $ap_unv) = array_pad(ap_sicherung_lesen(
-            (string) @file_get_contents($ap_tmp, false, null, 0, 65537), $ap_cfg), 5, array());
-        if ($ap_neu === null) {
-            /* ALLE Beanstandungen, nicht nur die erste - und geaendert wird
-             * nichts. Der Satz traegt Auszeichnung, die Beanstandungen sind
-             * Klartext und werden hier EINMAL maskiert. */
-            $ap_fehler_html[] = ap_t('EINST.SICH_ABGELEHNT') . ' '
-                              . ap_e(implode(' ', $ap_mangel));
-        } elseif (ap_config_write($ap_neu)) {
-            $ap_hinweise[] = sprintf(ap_t('EINST.SICH_UEBERNOMMEN'), $ap_n);
-            // N5 (1.2.23): eine Sicherung bis 1.2.22 kennt die neuen Schluessel nicht - sie bleiben.
-            if ($ap_unv) {
-                $ap_hinweise[] = sprintf(ap_t('EINST.SICH_WAHLFREI'), implode(', ', $ap_unv));
-            }
-            ap_abo_datei(ap_praefix($ap_neu), true);
-            $ap_h = ap_praefix_wechsel_hinweis($ap_cfg, $ap_neu);
-            if ($ap_h !== '') {
-                $ap_hinweise[] = $ap_h;
+        $ap_sb['speichern'] = function ($neu) { return ap_config_write($neu); };
+        $ap_sp = ap_paths();
+        if ($ap_sp['home'] !== '') {
+            // A4 (1.2.23): die Zweitschrift neben dem Konfigordner (ap_zweitschrift_schreiben()).
+            $ap_sb['zweitschrift'] = function () use ($ap_sp) {
+                return array($ap_sp['config'], $ap_sp['home'] . '/config/plugins/' . $ap_sp['plugin'] . '.backup.apc_ups_ng.cfg');
+            };
+        }
+        /* Den Dienst nachziehen UND sagen, was mit ihm geschah (Regeln/05) - dieselben Schritte wie bis 1.2.31. */
+        $ap_sb['nachziehen'] = function ($neu, $vorher) {
+            $h = array();
+            ap_abo_datei(ap_praefix($neu), true);
+            $ph = ap_praefix_wechsel_hinweis($vorher, $neu);
+            if ($ph !== '') {
+                $h[] = $ph;
             }
             if (ap_angehalten()) {
-                $ap_hinweise[] = ap_t('TEXT.DIENST_ANGEHALTEN');
+                $h[] = ap_t('TEXT.DIENST_ANGEHALTEN');
             } elseif (ap_dienst_pid() > 0) {
                 ap_dienst('uebernehmen');
-                $ap_hinweise[] = ap_dienst_pid()
-                    ? ap_t('TEXT.DIENST_NEU_GESTARTET')
-                    : ap_t('TEXT.DIENST_LAEUFT_NICHT');
+                $h[] = ap_dienst_pid() ? ap_t('TEXT.DIENST_NEU_GESTARTET') : ap_t('TEXT.DIENST_LAEUFT_NICHT');
             } else {
-                $ap_hinweise[] = ap_t('EINST.SICH_DIENST_NICHT');
+                $h[] = ap_t('EINST.SICH_DIENST_NICHT');
             }
+            return $h;
+        };
+        $ap_sb['log'] = function ($z) { ap_log($z, 'Sicherung'); };
+        $ap_sr = sicherung_zurueckspielen($ap_sb, $ap_sroh);
+        $ap_sm = sicherung_meldungen($ap_klar + $ap_sb, $ap_sr);
+        foreach ($ap_sm['fehler'] as $ap_x) { $ap_fehler[] = $ap_x; }
+        foreach ($ap_sm['hinweise'] as $ap_x) { $ap_hinweise[] = $ap_x; }
+        if ($ap_sr['gespeichert']) {
             list($ap_cfg, $ap_altformat) = ap_config_read();
             $ap_praefix = ap_praefix($ap_cfg);
-        } else {
-            $ap_fehler[] = ap_t('EINST.SICH_SCHREIBFEHLER');
         }
     }
 }
@@ -959,7 +960,7 @@ if (ap_mit_zielen()) { echo ansage_testknoepfe_html(ap_tts($ap_cfg), ap_ansage_k
 <div class="sm-warnung"><?= ap_t('EINST.SICH_WARNUNG') ?></div>
 <?php
 /* X-3 (30.09.2026): Bestuende die eigene Sicherung das Zurueckspielen nicht,
- * steht es hier - geprueft mit ap_sicherung_lesen(), derselben Funktion wie
+ * steht es hier - geprueft mit dem Sicherungsmodul, derselben Pruefung wie
  * beim Zurueckspielen. Genannt werden die Einstellungen, nicht ihre Werte. */
 $ap_sich_mangel = ap_sicherung_eigene_maengel($ap_cfg);
 if ($ap_sich_mangel) { ?>
@@ -981,6 +982,7 @@ if ($ap_sich_mangel) { ?>
     <input data-role="none" type="hidden" name="activetab" value="tab-settings">
     <input data-role="none" type="hidden" name="ap_form" value="<?php echo ap_e($ap_formtoken); ?>">
     <input data-role="none" type="file" name="ap_sicherung" accept=".json">
+    <?= sicherung_haken_zeile(ap_sicherung_beschreibung()) ?>
     <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="ap_zurueck" value="1"><?= ap_t('EINST.K_ZURUECK') ?></button>
   </form>
 </div>
