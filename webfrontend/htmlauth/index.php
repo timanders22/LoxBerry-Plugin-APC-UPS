@@ -583,7 +583,8 @@ if ($ap_frame) {
     // Der Verweis zeigt auf DIESES Repository, nicht auf die Wiki-Seite des
     // Originalplugins: die beschreibt eine andere Fassung mit anderer
     // Bedienung, und Rueckfragen dazu gehoeren nicht zum Originalautor.
-    LBWeb::lbheader('APC-UPS NG', 'https://github.com/timanders22/LoxBerry-Plugin-APC-UPS', 'help.html');
+    require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+    LBWeb::lbheader(plugin_kopftitel('APC-UPS NG', __DIR__), 'https://github.com/timanders22/LoxBerry-Plugin-APC-UPS', 'help.html');
 }
 
 ?>
