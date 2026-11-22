@@ -509,6 +509,7 @@ VORGABEN = {
     "ansage_ruhe_ein":    "1",
     "ansage_ruhe_von":    "22:00",
     "ansage_ruhe_bis":    "07:00",
+    "ansage_ruhe_bis_frei": "",     # 1.2.35 (Stamm 1.5.0): wie ap_lib.php
     "ansage_sperre_min":  "",
     "ansage_token_herkunft": "",
     # V2: haus/usv/stufe und haus/usv/zaehler an andere Plugins geben

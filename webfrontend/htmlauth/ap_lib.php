@@ -266,6 +266,7 @@ function ap_defaults()
         'ansage_homepod_geraet' => '',
         'ansage_ruhe_von'    => '22:00',
         'ansage_ruhe_bis'    => '07:00',
+        'ansage_ruhe_bis_frei' => '',     // 1.2.35 (Stamm 1.5.0): Nachtruhe an Nicht-Schultagen bis, leer = Vorgabe aus Ferien und Feiertage
         'ansage_sperre_min'  => '',
         'ansage_token_herkunft' => '',
         // V2: haus/usv/stufe an andere Plugins geben (Regeln/07 Nr. 15), ab Werk aus.
@@ -1661,7 +1662,7 @@ function ap_wert_pruefen($k, $v)
         return array(true, $tp['ziele'] ? (string) json_encode($tp['ziele'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '', '');
     }
     /* 1.2.25: die Regeln (flach). */
-    if (in_array((string) $k, array('ansage_tafel_ein', 'ansage_tafel_namen', 'ansage_homepod_ein', 'ansage_homepod_geraet', 'ansage_ruhe_ein', 'ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min', 'ansage_token_herkunft'), true)) {
+    if (in_array((string) $k, array('ansage_tafel_ein', 'ansage_tafel_namen', 'ansage_homepod_ein', 'ansage_homepod_geraet', 'ansage_ruhe_ein', 'ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_ruhe_bis_frei', 'ansage_sperre_min', 'ansage_token_herkunft'), true)) {
         $ap_rg = function ($k, $w) {
         if ($k === 'ansage_token_herkunft') { return $w === '' || is_array(json_decode($w, true)); }
         if ($k === 'ansage_ruhe_ein') { return $w === '0' || $w === '1'; }
@@ -1670,6 +1671,7 @@ function ap_wert_pruefen($k, $v)
         if ($k === 'ansage_homepod_ein') { return $w === '0' || $w === '1'; }
         if ($k === 'ansage_homepod_geraet') { return ansage_geraet_ok($w); }
         if ($k === 'ansage_ruhe_von' || $k === 'ansage_ruhe_bis') { return is_string($w) && (bool) preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]\z/', $w); }
+        if ($k === 'ansage_ruhe_bis_frei') { return is_string($w) && ($w === '' || (bool) preg_match('/^([01][0-9]|2[0-3]):[0-5][0-9]\z/', $w)); }     // 1.2.35
         if ($k === 'ansage_sperre_min') { return is_string($w) && ($w === '' || ((bool) preg_match('/^[0-9]{1,3}\z/', $w) && (int) $w >= 5 && (int) $w <= 240)); }
             return false;
         };
@@ -2291,6 +2293,9 @@ function ap_ansage_regeln($cfg = null)
         if (isset($cfg['ansage_tafel_namen'])) { $r['tafel_namen'] = (string) $cfg['ansage_tafel_namen']; }
         if (isset($cfg['ansage_homepod_ein']) && (string) $cfg['ansage_homepod_ein'] === '0') { $r['homepod'] = 0; }     // 1.2.28
         if (isset($cfg['ansage_homepod_geraet'])) { $r['homepod_geraet'] = (string) $cfg['ansage_homepod_geraet']; }
+        /* 1.2.35 (Stamm 1.5.0): das Ende an Nicht-Schultagen. Eine zuerst geladene aeltere Abschrift kennt den Schluessel nicht
+         * und wiese die Regeln sonst ganz ab. */
+        if (isset($cfg['ansage_ruhe_bis_frei']) && function_exists('ansage_regeln_heute')) { $r['bis_frei'] = (string) $cfg['ansage_ruhe_bis_frei']; }
     }
     $p = ansage_regeln_wert($r, $g);
     return $p === null ? ansage_regeln_vorgaben() : $p;
