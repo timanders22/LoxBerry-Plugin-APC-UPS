@@ -252,6 +252,11 @@ if ($ap_ist_post && isset($_POST['test'])) {
  * Token (ansage_kennung_text). Orange (Regeln/04: Testansagen loesen etwas aus). */
 /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): die Knoepfe "Testansage an Ziel n" schicken ansage_test_ziel=n - es spricht
  * nur dieses Ziel; der bisherige Knopf spricht an alle Ziele gleichzeitig. Eine unbrauchbare Nummer spricht nichts. */
+/* 1.2.36: Testmeldung an SignalBot (Knopf unter den Ansage-Regeln). */
+if ($ap_ist_post && isset($_POST['meld_test'])) {
+    list($meld_ok, $meld_satz) = ap_meld_test();
+    if ($meld_ok) { $ap_hinweise[] = $meld_satz; } else { $ap_fehler[] = $meld_satz; }
+}
 if ($ap_ist_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel']))) {
     $ap_tk = ap_ansage_k();
     $ap_tnur = (isset($_POST['ansage_test_ziel']) && ap_mit_zielen()) ? ansage_test_ziel($_POST) : 0;
@@ -323,6 +328,8 @@ if ($ap_ist_post && isset($_POST['save'])) {
     $ap_tts_neu = ansage_formular_lesen($_POST, ap_tts($ap_cfg), $ap_tm, $ap_tb,
         array('modi' => ap_ansage_modi(), 'ziele' => ap_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), ap_ansage_k(), $ap_thinw);
     list($ap_rneu) = ansage_regeln_formular($_POST, ap_ansage_regeln($ap_cfg), array(), $ap_tm, $ap_tb, ap_ansage_k());     // 1.2.25: Wann gesprochen wird (Stamm)
+    // 1.2.36: der Block 'Meldungen an SignalBot' (eine Beanstandung haelt das Speichern an, wie die Ansage)
+    $ap_meld = meld_formular_lesen($_POST, ap_meld_aus_cfg($ap_cfg), ap_meld_anlaesse(), $ap_tm, $ap_tb, ap_meld_k(), ap_meld_haken_vorgabe());
     foreach ($ap_tm as $ap_x) { $ap_mangel[] = $ap_x['text']; }
     foreach ($ap_tb as $ap_x) { $ap_falsch[] = ap_ziele_x2_name($ap_x); }     // 1.2.24: name[N] der Tabelle -> name.N
     if ($ap_mangel) {
@@ -347,7 +354,7 @@ if ($ap_ist_post && isset($_POST['save'])) {
             }
         }
         $ap_eingaben = ap_eingaben_merken('settings', $ap_zurueck, $ap_falsch);
-    } elseif (ap_config_write(array_merge($ap_cfg, $ap_gut, ap_tts_cfg($ap_tts_neu), array('ansage_token_herkunft' => (string) json_encode(ansage_token_herkunft_formular($_POST, ap_ansage_her($ap_cfg))), /* 1.2.28: von Hand eingetragen = kein Nachbar-Token mehr */ 'ansage_tafel_ein' => !empty($ap_rneu['tafel']) ? '1' : '0', 'ansage_tafel_namen' => (string) $ap_rneu['tafel_namen'], 'ansage_homepod_ein' => !empty($ap_rneu['homepod']) ? '1' : '0', 'ansage_homepod_geraet' => (string) $ap_rneu['homepod_geraet'], 'ansage_ruhe_ein' => !empty($ap_rneu['nachtruhe']) ? '1' : '0', 'ansage_ruhe_von' => (string) $ap_rneu['von'], 'ansage_ruhe_bis' => (string) $ap_rneu['bis'], 'ansage_ruhe_bis_frei' => isset($ap_rneu['bis_frei']) ? (string) $ap_rneu['bis_frei'] : '', 'ansage_sperre_min' => (string) (int) $ap_rneu['sperre_min'])))) {
+    } elseif (ap_config_write(array_merge($ap_cfg, $ap_gut, ap_meld_in_cfg($ap_meld), ap_tts_cfg($ap_tts_neu), array('ansage_token_herkunft' => (string) json_encode(ansage_token_herkunft_formular($_POST, ap_ansage_her($ap_cfg))), /* 1.2.28: von Hand eingetragen = kein Nachbar-Token mehr */ 'ansage_tafel_ein' => !empty($ap_rneu['tafel']) ? '1' : '0', 'ansage_tafel_namen' => (string) $ap_rneu['tafel_namen'], 'ansage_homepod_ein' => !empty($ap_rneu['homepod']) ? '1' : '0', 'ansage_homepod_geraet' => (string) $ap_rneu['homepod_geraet'], 'ansage_ruhe_ein' => !empty($ap_rneu['nachtruhe']) ? '1' : '0', 'ansage_ruhe_von' => (string) $ap_rneu['von'], 'ansage_ruhe_bis' => (string) $ap_rneu['bis'], 'ansage_ruhe_bis_frei' => isset($ap_rneu['bis_frei']) ? (string) $ap_rneu['bis_frei'] : '', 'ansage_sperre_min' => (string) (int) $ap_rneu['sperre_min'])))) {
         $ap_saved = true;
         foreach ($ap_thinw as $ap_th) { $ap_hinweise[] = $ap_th['text']; }     // Welle Mehrfach-Ziele: erst nach dem Speichern
         if (isset($GLOBALS['ap_zweitschrift_ok']) && $GLOBALS['ap_zweitschrift_ok'] === false) {
@@ -401,6 +408,16 @@ if ($ap_ist_post && isset($_POST['save_mqtt'])) {
     $eingabe['rohfelder'] = $rf_ok ? $rf_wert : '';
 
     list($ap_gut, $ap_mangel, $ap_falsch) = ap_werte_pruefen($eingabe);
+    /* 1.2.36 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): kein Praefix auf einem
+     * gemeinsamen Bereich unter haus/ - nur hier und beim Zurueckspielen, nicht in der Pruefung beim Lesen der
+     * Konfiguration: ein schon gespeichertes bleibt in Betrieb, der Reiter Test meldet es. */
+    if (isset($ap_gut['themenpraefix']) && hb_bereich($ap_gut['themenpraefix']) !== ''
+        && $ap_gut['themenpraefix'] !== (string) ap_cfg($ap_cfg, 'themenpraefix', '')) {   // nur NEUE Eingaben: ein schon gespeichertes Praefix sperrt das Speichern
+        // des Reiters nicht (Regeln/07; Bauart Einspeisebremse 0.9.25)
+        $ap_mangel[] = sprintf(ap_t('HAUSBEREICH.FEHLER'), $ap_gut['themenpraefix'], hb_bereich($ap_gut['themenpraefix']));
+        $ap_falsch[] = 'themenpraefix';
+        unset($ap_gut['themenpraefix']);
+    }
     if (!$rf_ok) {
         unset($ap_gut['rohfelder']);
         $ap_mangel[] = $rf_text;
@@ -917,6 +934,7 @@ if ($ap_w && isset($ap_w['data_valid']) && (int) $ap_w['data_valid'] === 0) { ?>
     'm' => function ($n) { return ap_fmark('settings', $n); },
     'c' => function ($n, $g) { return ap_fwert('settings', $n, $g ? '1' : '') === '1'; },
     'token_vor_ort' => true), ap_ansage_k()) ?>
+<?= ap_meld_form_html($ap_cfg) ?>
 <div class="sm-hilfe"><?php echo ap_t('EINST.ANSAGE_AUDIOSERVER'); ?></div>
 <div class="sm-feld">
 <label><?php echo ap_e(ap_t('EINST.ANSAGE_ANLAESSE')); ?></label>

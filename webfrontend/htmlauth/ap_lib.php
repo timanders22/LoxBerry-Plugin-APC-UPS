@@ -43,11 +43,13 @@
 if (is_file(__DIR__ . '/sprachausgabe.php')) {
     require_once __DIR__ . '/sprachausgabe.php';
 }
+require_once __DIR__ . '/meldung.php';     // Statusmeldungen an SignalBot (seit 1.2.36)
 /* 1.2.32: die Abschrift des gemeinsamen Sicherungsmoduls (Stammfassung Werkzeuge/gemeinsam/sicherung.php, byte-gleich,
  * Werkzeuge/sicherung_einbauen.py) liegt neben dieser Datei. "Einstellungen sichern" und "Einstellungen zurueckspielen"
  * laufen darueber, in allen Linien gleich (Auftrag des Hausherrn 12.11.2026); diese Linie uebergibt nur ihre
  * Beschreibung (ap_sicherung_beschreibung()). Antwortet als Einstieg mit 403. */
 require_once __DIR__ . '/sicherung.php';
+require_once __DIR__ . '/haus_bereiche.php';     // gemeinsame Bereiche unter haus/ (seit 1.2.36, Regeln/07)
 
 if (!function_exists('ap_e')) {
     function ap_e($s)
@@ -257,6 +259,14 @@ function ap_defaults()
         'ansage_rueckkehr'   => '1',
         'ansage_vorwarnung'  => '1',
         'ansage_abschaltung' => '1',
+        /* 1.2.36: Meldungen an SignalBot (gemeinsames Modul meldung.php), ab Werk aus; der Block des Moduls flach, wie
+         * die Datei es kann (ap_meld_aus_cfg()). Die Haken stehen ab Werk wie die der Ansage. */
+        'meld_ein'           => '0',
+        'meld_sperre_min'    => '60',
+        'meld_ausfall'       => '1',
+        'meld_rueckkehr'     => '1',
+        'meld_vorwarnung'    => '1',
+        'meld_abschaltung'   => '1',
         'ansage_sperre'      => '600',
         // 1.2.25: Wann gesprochen wird (Stamm). ansage_sperre_min leer = aus ansage_sperre; der Vermerk reist nie in einer Sicherung.
         'ansage_ruhe_ein'    => '1',
@@ -298,6 +308,28 @@ function ap_shell_arg($s)
  * Bis 1.2.31 fiel er hier still weg. Am Speichern aendert sich nichts: ap_config_write() schreibt wie bisher genau
  * die Schluessel aus ap_defaults(). Der Dienst liest die Datei selbst (bin/apc_common.py konfiguration_lesen()).
  */
+/** 1.2.36: der Block 'meldung' des Moduls aus den flachen Schluesseln meld_* (null = nie gespeichert: die Vorgabe). Werte
+ *  '0'/'1' und Ziffern werden Zahlen; alles andere bleibt, wie es steht - meld_block() nennt es dann ungueltig. */
+function ap_meld_aus_cfg($cfg)
+{
+    if (!is_array($cfg) || !array_key_exists('meld_ein', $cfg)) { return null; }
+    $z = function ($w) { return (is_string($w) && preg_match('/^[0-9]{1,6}\z/', $w) === 1) ? (int) $w : $w; };
+    $h = array();
+    foreach (array('ausfall', 'rueckkehr', 'vorwarnung', 'abschaltung') as $a) {
+        $h[$a] = $z(array_key_exists('meld_' . $a, $cfg) ? $cfg['meld_' . $a] : '1');
+    }
+    return array('ein' => $z($cfg['meld_ein']), 'haken' => $h, 'sperre_min' => $z(isset($cfg['meld_sperre_min']) ? $cfg['meld_sperre_min'] : ''));
+}
+
+/** 1.2.36: der Block zurueck in die flachen Schluessel (fuer ap_config_write()). */
+function ap_meld_in_cfg($b)
+{
+    if (!is_array($b)) { return array(); }
+    $aus = array('meld_ein' => !empty($b['ein']) ? '1' : '0', 'meld_sperre_min' => (string) (isset($b['sperre_min']) ? $b['sperre_min'] : ''));
+    foreach ((isset($b['haken']) && is_array($b['haken'])) ? $b['haken'] : array() as $a => $v) { $aus['meld_' . $a] = !empty($v) ? '1' : '0'; }
+    return $aus;
+}
+
 function ap_config_read()
 {
     $werte = ap_defaults();
@@ -1508,6 +1540,10 @@ function ap_sicherung_beschreibung()
         /* Die Beanstandung nennt den Schluessel, wie er in der Datei steht, und den Grund aus ap_wert_pruefen(). */
         'pruefen' => function ($k, $w) {
             $e = ap_wert_pruefen((string) $k, $w);
+            /* 1.2.36: kein Praefix auf einem gemeinsamen Bereich unter haus/ (Regeln/07) - wie im Formular. */
+            if ($e[0] && $k === 'themenpraefix' && is_string($w) && hb_bereich($w) !== '') {
+                return sprintf(ap_t('EINST.SICH_WERT'), (string) $k, sprintf(ap_t('HAUSBEREICH.SICH_W'), hb_bereich($w)));
+            }
             return $e[0] ? '' : sprintf(ap_t('EINST.SICH_WERT'), (string) $k, $e[2]);
         },
         'quer' => 'ap_sicherung_quer',
@@ -1700,6 +1736,10 @@ function ap_wert_pruefen($k, $v)
     if (!is_string($v)) {
         return array(false, '', sprintf(ap_t('EINST.W_TYP'), $name, gettype($v)));
     }
+    if ($k === 'meld_sperre_min') {     // 1.2.36: Sperre der Meldungen an SignalBot, wie das Modul sie annimmt
+        return meld_sperre_wert(preg_match('/^[0-9]{1,6}\z/', $v) === 1 ? (int) $v : $v) !== null ? array(true, $v, '')
+            : array(false, '', meld_t('M_SPERRE', ap_meld_k()));
+    }
     switch ($k) {
         case 'enabled':
         case 'mqtt':
@@ -1710,6 +1750,11 @@ function ap_wert_pruefen($k, $v)
         case 'ansage_rueckkehr':
         case 'ansage_vorwarnung':
         case 'ansage_abschaltung':
+        case 'meld_ein':     // 1.2.36: Meldungen an SignalBot
+        case 'meld_ausfall':
+        case 'meld_rueckkehr':
+        case 'meld_vorwarnung':
+        case 'meld_abschaltung':
         case 'haus_usv_ein':
             return ($v === '0' || $v === '1') ? array(true, $v, '')
                 : array(false, '', sprintf(ap_t('EINST.W_SCHALTER'), $name, $v));
@@ -2431,6 +2476,8 @@ function ap_ansage_senden($jetzt = null)
         $conf = ap_ansage_conf();
         ap_ansage_token_pflegen($conf);
         $conf = ap_ansage_conf();
+        ap_meld_senden($frisch, $conf);     // 1.2.36: dieselben Anlaesse an SignalBot (eigene Haken)
+        $frisch = ap_meld_nur_ansage($frisch, $conf);     // die Ansage nur mit ihrem eigenen Haken
         $a = ansage_regel_sprechen($frisch, ap_tts($conf), ap_ansage_regeln($conf), ap_ansage_k());
         $erg = $a['regel'] !== '' ? $a['regel'] : 'gesprochen';
         if ($a['r'] !== null) {
@@ -2611,4 +2658,151 @@ function ap_namen_probe($cfg)
         }
     }
     return array((!$abw && $zeilen) ? true : false, count($zeilen), count(ap_v2_haken()), $nc, array_values(array_unique($abw)));
+}
+
+/**
+ * 1.2.36 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): Zeile im Reiter Test -
+ * faellt das gespeicherte Themen-Praefix auf einen gemeinsamen Bereich unter haus/? Speichern und Zurueckspielen
+ * weisen ein solches Praefix ab; ein schon gespeichertes bleibt in Betrieb und ist hier rot, grau bei ausgeschaltetem MQTT.
+ * Dazu der Vergleich der Liste mit der, die der Dienst in seinen Zustand schreibt (haus_bereiche).
+ * Liste und Pruefung aus dem gemeinsamen Modul haus_bereiche.php. Rueckgabe array(stand, html).
+ */
+function ap_pruef_praefix_haus($cfg)
+{
+    $p = ap_praefix($cfg);
+    $b = hb_bereich($p);
+    if ($b !== '') {
+        if (!(ap_cfg($cfg, 'mqtt', '1') === '1')) {
+            return array(-1, sprintf(ap_t('HAUSBEREICH.A_AUS'), ap_e($p), ap_e($b)));
+        }
+        return array(0, sprintf(ap_t('HAUSBEREICH.A_NEIN'), ap_e($p), ap_e($b)));
+    }
+    $z = (is_array(ap_status()) && isset(ap_status()['haus_bereiche'])) ? ap_status()['haus_bereiche'] : null;
+    if (!is_array($z)) {
+        return array(-1, sprintf(ap_t('HAUSBEREICH.A_UNBEKANNT'), ap_e($p)));
+    }
+    if ($z !== hb_bereiche()) {
+        return array(0, sprintf(ap_t('HAUSBEREICH.A_LISTE'), ap_e(implode(', ', hb_bereiche())),
+            ap_e(implode(', ', array_map('strval', $z)))));
+    }
+    return array(1, sprintf(ap_t('HAUSBEREICH.A_JA'), ap_e($p)));
+}
+
+if (!function_exists('ap_meld_block')) {
+
+/* ---------------- Statusmeldungen an SignalBot (1.2.36, gemeinsames Modul meldung.php) ----------------
+ *
+ * Auftrag des Hausherrn 23.11.2026, Entscheidungen 23./24.11.2026: dieselben Anlaesse wie die Ansage, eigener Haken je
+ * Anlass, ab Werk aus; Sperre, Bremse und Versand im Modul. Die Erkennung laeuft auch ohne Ausgabeart, wenn eine Meldung
+ * eingeschaltet ist (ap_meld_aktiv()), und legt einen Anlass hin, wenn Ansage ODER Meldung ihn will
+ * (ap_meld_will()); der Sender trennt die Wege wieder (ap_meld_nur_ansage()).
+ */
+
+/** Die meldbaren Anlaesse: Name => Beschriftung (dieselben wie die Ansage). */
+function ap_meld_anlaesse()
+{
+    return array('ausfall' => ap_t('EINST.ANSAGE_AUSFALL'), 'rueckkehr' => ap_t('EINST.ANSAGE_RUECKKEHR'), 'vorwarnung' => ap_t('EINST.ANSAGE_VORWARNUNG'), 'abschaltung' => ap_t('EINST.ANSAGE_ABSCHALTUNG'));
+}
+
+/** Die ab-Werk-Haken der Ansage dieser Linie: so stehen auch die Haken der Meldung, solange der Block nie gespeichert ist. */
+function ap_meld_haken_vorgabe()
+{
+    return array('ausfall' => 1, 'rueckkehr' => 1, 'vorwarnung' => 1, 'abschaltung' => 1);
+}
+
+/** Ist der Haken dieses Anlasses fuer die ANSAGE gesetzt? */
+function ap_ansage_anlass_sprache($a, $cfg = null)
+{
+    if ($cfg === null) { $cfg = ap_config_read()[0]; }
+    return in_array((string) $a, array('ausfall', 'rueckkehr', 'vorwarnung', 'abschaltung'), true) && is_array($cfg)
+        && (!isset($cfg['ansage_' . $a]) || (string) $cfg['ansage_' . $a] === '1') && ap_tts($cfg)['mode'] !== 'aus';
+}
+
+/** Der wirksame Block 'meldung' fuer den Betrieb (ungueltig gespeichert gilt als aus und wird im Formular genannt). */
+function ap_meld_block($cfg = null)
+{
+    if ($cfg === null) { $cfg = ap_config_read()[0]; }
+    list($b) = meld_block(ap_meld_aus_cfg($cfg), ap_meld_anlaesse(), ap_meld_haken_vorgabe());
+    return $b;
+}
+
+/** Die Beanstandungen eines gespeicherten Blocks (leer = gueltig). */
+function ap_meld_bean($cfg = null)
+{
+    if ($cfg === null) { $cfg = ap_config_read()[0]; }
+    list(, $f) = meld_block(ap_meld_aus_cfg($cfg), ap_meld_anlaesse(), ap_meld_haken_vorgabe());
+    return $f;
+}
+
+/** Ist irgendein Anlass zur Meldung eingeschaltet? Dann laeuft die Erkennung auch ohne Ausgabeart. */
+function ap_meld_aktiv($cfg = null)
+{
+    return meld_irgendein_an(ap_meld_block($cfg));
+}
+
+/** Will die Ansage ODER die Meldung diesen Anlass? */
+function ap_meld_will($a, $cfg = null)
+{
+    if ($cfg === null) { $cfg = ap_config_read()[0]; }
+    return ap_ansage_anlass_sprache($a, $cfg) || meld_anlass_an(ap_meld_block($cfg), (string) $a);
+}
+
+/** Der Kontext des Moduls: Datenordner (data/plugins/<ordner>, daraus der Absender) und Texte - wie bei der Ansage. */
+function ap_meld_k()
+{
+    return ap_ansage_k();
+}
+
+/** Fuer die Ansage nur Eintraege, deren Ansage-Haken gesetzt ist; ein Eintrag ohne bekannten Anlass bleibt wie bisher. */
+function ap_meld_nur_ansage(array $l, $cfg = null)
+{
+    if ($cfg === null) { $cfg = ap_config_read()[0]; }
+    $anl = ap_meld_anlaesse();
+    $aus = array();
+    foreach ($l as $e) {
+        if (is_array($e) && array_key_exists(meld_anlass_von($e), $anl) && !ap_ansage_anlass_sprache(meld_anlass_von($e), $cfg)) { continue; }
+        $aus[] = $e;
+    }
+    return $aus;
+}
+
+/** Die Eintraege an SignalBot melden. Protokoll: eine Zeile, wenn gesendet oder gescheitert (nie der Text). */
+function ap_meld_senden(array $l, $cfg = null)
+{
+    if ($cfg === null) { $cfg = ap_config_read()[0]; }
+    $b = ap_meld_block($cfg);
+    if (empty($b['ein']) || !$l) { return null; }
+    $a = meld_regel_senden($l, $b, ap_meld_k());
+    if ($a['regel'] === '' || in_array($a['regel'], array('BREMSE', 'STAND', 'ORDNER'), true)) {
+        ap_log(meld_regel_kurz($a));
+    }
+    return $a;
+}
+
+/** Der Knopf "Testmeldung senden": array(angenommen, Satz). Geht an Haken, Sperre und Bremse vorbei. */
+function ap_meld_test()
+{
+    $r = meld_testmeldung(ap_meld_k());
+    ap_log('Testmeldung an SignalBot: ' . ($r[0] ? 'angenommen' : 'nicht angenommen'));
+    return $r;
+}
+
+/** Der Block im Einstellungsformular (unter den Ansage-Regeln, im selben Formular), mit Lage und Knopf. */
+function ap_meld_form_html($cfg = null)
+{
+    if ($cfg === null) { $cfg = ap_config_read()[0]; }
+    $e = function ($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); };
+    $k = ap_meld_k();
+    $o = array();
+    /* 1.2.36: unsichtbarer Doppel des Speicherknopfs VOR dem Knopf Testmeldung - die Eingabetaste in einem Textfeld
+     * loest den ersten Absendeknopf des Formulars aus; sie soll speichern wie bisher, nicht die Testmeldung senden. */
+    $o[] = '<button data-role="none" type="submit" name="save" value="1" tabindex="-1" aria-hidden="true" style="position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden"></button>';
+    $o[] = '<h3>' . $e(meld_t('TITEL', $k)) . '</h3>';
+    $o[] = meld_formular_html(ap_meld_block($cfg), ap_meld_anlaesse(), array(), $k);
+    list(, $lage) = meld_pruefzeile(ap_meld_block($cfg), ap_meld_bean($cfg), $k);
+    $o[] = '<div class="sm-hilfe">' . $e(meld_t('F_TEST', $k) . ' ' . $lage) . '</div>';
+    $o[] = '<div class="sm-knopfreihe"><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="meld_test" value="1">'
+         . $e(meld_t('K_TEST', $k)) . '</button></div>';
+    return implode("\n", $o) . "\n";
+}
 }

@@ -101,7 +101,7 @@ $rest = (isset($auftrag['rest']) && is_int($auftrag['rest'])) ? $auftrag['rest']
 /* bis 1.2.24 hiess dieses Feld $cfg: das LoxBerry-SDK ueberschreibt ein globales $cfg beim ersten Lesen von general.json (Ausfall MGiSmart 01.11.2026). */
 list($ap_lauf_cfg) = ap_config_read();
 $ap_lauf_tts = ap_tts($ap_lauf_cfg);
-if ($ap_lauf_tts['mode'] === 'aus') {
+if ($ap_lauf_tts['mode'] === 'aus' && !ap_meld_aktiv($ap_lauf_cfg)) {     // 1.2.36: auch fuer die Meldung an SignalBot
     echo "ANSAGE;STAND=-1;KENNUNG=AUS\n";
     exit(3);
 }

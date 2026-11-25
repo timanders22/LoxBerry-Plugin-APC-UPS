@@ -32,6 +32,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys   # 1.2.36: fuer haus_bereiche.py (Regeln/07)
 import time
 
 
@@ -370,6 +371,15 @@ def altlast_merker_schreiben(kennung):
         except OSError:
             pass
         return False
+
+
+def ansage_oder_meldung(cfg, anlass):
+    """1.2.36: geht ein Anlass an die Bruecke? Mit gesetztem Ansage-Haken (wie bisher) ODER mit eingeschalteter Meldung an
+    SignalBot und deren Haken (flache Schluessel meld_ein, meld_<anlass>; ab Werk aus). Ausgabeart, Nachtruhe und Sperre
+    prueft die Bruecke."""
+    if cfg.get("ansage_" + anlass, "1") == "1":
+        return True
+    return cfg.get("meld_ein", "0") == "1" and cfg.get("meld_" + anlass, "1") == "1"
 
 
 def _zeitzone_setzen():
@@ -1442,3 +1452,24 @@ def benachrichtigen(text, schwere="warning"):
         return lauf.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
+
+def _haus_bereiche():
+    """1.2.36 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): das gemeinsame
+    Modul haus_bereiche.py neben dem Dienst, beim ersten Aufruf geladen."""
+    hier = os.path.dirname(os.path.abspath(__file__))
+    if hier not in sys.path:
+        sys.path.insert(0, hier)
+    import haus_bereiche  # noqa: E402
+    return haus_bereiche
+
+
+def praefix_haus_melden(praefix):
+    """1.2.36: einmal je Aenderung eine Protokollzeile, solange das Praefix auf einen gemeinsamen Bereich unter
+    haus/ faellt; der Versand bleibt, wie er ist. Rueckgabe der gemeldete Bereich oder ""."""
+    hb = _haus_bereiche()
+    bereich = hb.hb_melden_faellig(praefix)
+    if bereich:
+        __import__("logging").getLogger("apc_ups_ng").warning("%s", hb.hb_logtext(praefix, bereich))
+    return bereich
+
+

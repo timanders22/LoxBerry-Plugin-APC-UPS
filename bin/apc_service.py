@@ -937,7 +937,9 @@ class Dienst:
         # frischen Wert von einem retained liegengebliebenen unterscheidet.
         self._senden("timestamp", jetzt, True)
 
+        gem.praefix_haus_melden(self.praefix)   # 1.2.36: im gemeinsamen Bereich? melden, nicht anhalten
         self.zustand_schreiben({
+            "haus_bereiche": list(gem._haus_bereiche().HB_BEREICHE),   # 1.2.36
             "zeit": jetzt, "version": gem.version(),
             "werte": werte, "roh": ergebnis["roh"],
             "zusatz": ergebnis["zusatz"], "fehler": "",
@@ -1052,7 +1054,7 @@ class Dienst:
         Anlass-Haken; Ausgabeart, Nachtruhe, Sperre und Schalter prueft seit 1.2.25 die
         Bruecke (gemeinsame Regeln). Laeuft noch ein Aufruf, wird dieser verworfen.
         Rueckgabe True, wenn ein Aufruf gestartet wurde."""
-        if self.cfg.get("ansage_" + anlass, "1") != "1":
+        if not gem.ansage_oder_meldung(self.cfg, anlass):     # 1.2.36: Ansage-Haken oder Meldung an SignalBot
             return False
         if self._v1_faden is not None and self._v1_faden.is_alive():
             log.info("Ansage %s uebersprungen - die vorige laeuft noch.", anlass)

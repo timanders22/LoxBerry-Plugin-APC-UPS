@@ -324,6 +324,9 @@ function ap_test_selbstpruefung($cfg, $w, $pid, $alter, $broker, $autostart)
     }
 
     // --- MQTT --------------------------------------------------------------
+    // 1.2.36: faellt das Themen-Praefix auf einen gemeinsamen Bereich unter haus/ (Regeln/07)?
+    $ap_hb = ap_pruef_praefix_haus($cfg);
+    ap_pruefzeile(ap_t('HAUSBEREICH.F_TEST'), $ap_hb[0] === 1 ? true : ($ap_hb[0] === 0 ? false : null), $ap_hb[1]);
     $mqtt_an = ap_cfg($cfg, 'mqtt', '1') === '1';
     if (!$mqtt_an) {
         ap_pruefzeile(ap_t('TEST.F_BROKER'), null, ap_e(ap_t('TEST.A_MQTT_AUS')));
